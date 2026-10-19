@@ -50,7 +50,7 @@ Changes are stored in Home Assistant, not in browser storage. Transmitter select
 
 Create a Home Assistant backup before installing or updating a custom integration. IR Pro metadata is kept in Home Assistant's configuration storage and included in normal configuration backups. Learned commands are kept by the Broadlink integration. Do not edit either integration's `.storage` files manually.
 
-To remove IR Pro, remove its integration entry, uninstall it in HACS and restart Home Assistant. Existing Broadlink devices and unrelated scripts remain configured.
+To remove IR Pro, remove its integration entry, uninstall it in HACS and restart Home Assistant. Existing Broadlink devices and unrelated scripts remain configured. Uninstalling does not purge IR Pro's saved metadata; reinstalling can restore it. To discard remotes, delete them in the panel before uninstalling.
 
 ## Development
 
