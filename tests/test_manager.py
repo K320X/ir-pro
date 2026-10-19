@@ -2,6 +2,7 @@
 
 import asyncio
 from copy import deepcopy
+import threading
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
@@ -69,6 +70,36 @@ class ManagerTests(unittest.IsolatedAsyncioTestCase):
         await self.manager.async_load()
         self.assertEqual(self.manager.envelope()["model"], empty_model())
         self.assertEqual(self.manager.revision, 0)
+        self.assertEqual(self.hass.services.calls, [])
+
+    async def test_source_events_update_entities_on_event_loop_and_unsubscribe_on_unload(self):
+        await self.prepare_captured_button()
+        self.hass.services.calls.clear()
+        loop_thread = threading.get_ident()
+        updates = []
+
+        def entity_state_write():
+            # Real HA's async_write_ha_state requires the event-loop thread.
+            updates.append((threading.get_ident(), self.manager.function_available(FUNCTION)))
+
+        self.manager.async_add_listener(entity_state_write)
+        await self.manager.async_start()
+        self.hass.states.values["remote.ir_salon"].state = "unavailable"
+        await self.hass.bus.async_fire("state_changed", {"entity_id": "remote.ir_salon"})
+        self.hass.states.values["remote.ir_salon"].state = "on"
+        await self.hass.bus.async_fire("state_changed", {"entity_id": "remote.ir_salon"})
+        self.assertEqual(updates, [(loop_thread, False), (loop_thread, True)])
+
+        await self.hass.bus.async_fire("state_changed", {"entity_id": "sensor.unrelated"})
+        self.assertEqual(len(updates), 2)
+        await self.hass.bus.async_fire("entity_registry_updated", {"entity_id": "remote.ir_salon"})
+        self.assertEqual(updates[-1], (loop_thread, True))
+        self.assertEqual(len(updates), 3)
+
+        await self.manager.async_unload()
+        await self.hass.bus.async_fire("state_changed", {"entity_id": "remote.ir_salon"})
+        self.assertEqual(len(updates), 3)
+        self.assertTrue(all(not listeners for listeners in self.hass.bus.listeners.values()))
         self.assertEqual(self.hass.services.calls, [])
 
     async def test_save_does_not_learn_or_transmit_and_returns_independent_envelope(self):

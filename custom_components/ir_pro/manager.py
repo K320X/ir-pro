@@ -9,6 +9,7 @@ from typing import Any, Callable
 from uuid import UUID, uuid4
 
 from homeassistant.const import EVENT_STATE_CHANGED, STATE_ON
+from homeassistant.core import callback
 from homeassistant.helpers import device_registry as dr, entity_registry as er
 from homeassistant.helpers.storage import Store
 
@@ -166,6 +167,7 @@ class IRProManager:
         record = self.signals.get(function.get("signal_refs", {}).get(signal, ""))
         return bool(record and record["source_id"] == source_id and record["signal"] == signal and signal_is_learned(record))
 
+    @callback
     def _notify(self) -> None:
         for listener in tuple(self._listeners):
             try:
@@ -179,6 +181,7 @@ class IRProManager:
 
     async def async_start(self) -> None:
         """Refresh entity availability on HA state/registry changes."""
+        @callback
         def changed(event) -> None:
             if event.event_type == EVENT_STATE_CHANGED:
                 entity_id = event.data.get("entity_id", "")

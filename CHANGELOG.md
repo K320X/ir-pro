@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.0b3
+
+- Keep source state and registry event callbacks on Home Assistant's event loop, fixing entity update errors after startup.
+- Includes the direct learn-and-save flow from beta 2; existing remotes, signals and entity IDs are preserved.
+
 ## 0.1.0b2
 
 - Save a learned signal directly without first testing it or confirming the appliance's response.

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from copy import deepcopy
 from enum import IntFlag
 import sys
@@ -9,6 +10,38 @@ from types import ModuleType, SimpleNamespace
 from unittest.mock import patch
 
 from tests.helpers import SOURCE
+
+
+def fake_callback(function):
+    """Mark synchronous functions that HA must dispatch on its event loop."""
+    function._fake_hass_callback = True
+    return function
+
+
+class FakeBus:
+    """Model HA's callback-versus-executor dispatch, including unsubscription."""
+
+    def __init__(self):
+        self.listeners = {}
+
+    def async_listen(self, event_type, listener):
+        listeners = self.listeners.setdefault(event_type, [])
+        listeners.append(listener)
+
+        def unsubscribe():
+            listeners.remove(listener)
+
+        return unsubscribe
+
+    async def async_fire(self, event_type, data=None):
+        event = SimpleNamespace(event_type=event_type, data=data or {})
+        for listener in tuple(self.listeners.get(event_type, [])):
+            if getattr(listener, "_fake_hass_callback", False):
+                listener(event)
+            else:
+                # A plain synchronous listener is a worker job in HA. This
+                # distinction catches async entity writes from the wrong thread.
+                await asyncio.to_thread(listener, event)
 
 
 class FakeStore:
@@ -149,6 +182,7 @@ class FakeHass:
         self.dr = FakeDeviceRegistry()
         self.services = FakeServices()
         self.states = FakeStates()
+        self.bus = FakeBus()
         self.dispatched = []
 
 
@@ -178,7 +212,7 @@ def fake_ha_modules():
 
     modules["homeassistant.components.remote"].RemoteEntityFeature = RemoteEntityFeature
     modules["homeassistant.core"].HomeAssistant = FakeHass
-    modules["homeassistant.core"].callback = lambda function: function
+    modules["homeassistant.core"].callback = fake_callback
     modules["homeassistant.config_entries"].ConfigEntry = SimpleNamespace
     modules["homeassistant.const"].STATE_UNAVAILABLE = "unavailable"
     modules["homeassistant.const"].STATE_UNKNOWN = "unknown"
