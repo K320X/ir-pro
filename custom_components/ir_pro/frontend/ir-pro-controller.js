@@ -13,7 +13,7 @@ export function mountStudio(root, api, initial, isAdmin, openMenu) {
   let pendingEntity=null,entityCustomized=false,entityAutoMessage='';
   let iconOptionsBuilt=false;
   let learningRequest=null;
-  let disposed=false,saving=false,confirmedModel=structuredClone(model),signalBusy=false,candidateSignals={},lastRelevantState="";
+  let disposed=false,saving=false,confirmedModel=structuredClone(model),signalBusy=false,lastRelevantState="";
   const drafts=new Map(), selections=new Map();
   const landingPreviews=new Set();
   const columnRejectionEffects=new Map();
@@ -294,7 +294,7 @@ export function mountStudio(root, api, initial, isAdmin, openMenu) {
     cancelLearning();closeDeleteFunctionDialog();
     const stored=getDevice()?.functions.find(f=>f.key===selected);fresh=!stored;
     draft=drafts.has(cacheKey())?structuredClone(drafts.get(cacheKey())):stored?structuredClone(stored):{key:uid(),name:'',showName:true,icon:'power',color:'#238fc4',type:'button',entity:'',signals:{},signal_refs:{},on:null};
-    candidateSignals={};closeIconPicker();closeEntityEditor();entityCustomized=!!stored;entityAutoMessage='';delete draft.pendingEntity;renderEditor();
+    closeIconPicker();closeEntityEditor();entityCustomized=!!stored;entityAutoMessage='';delete draft.pendingEntity;renderEditor();
   }
   function go(next){
     cancelLearning();closeDeleteFunctionDialog();closeIconPicker();closeEntityEditor();if(q('#ir-function-dialog').open)closeFunctionEditor();if(q('#ir-rename-remote-dialog').open)q('#ir-rename-remote-dialog').close();if(q('#ir-transfer-dialog').open)q('#ir-transfer-dialog').close();closeMenus();resetMoving();route=next;editMode=false;selected=null;draft=null;flowFeedback('');q('#ir-feedback').textContent='';
@@ -341,7 +341,7 @@ export function mountStudio(root, api, initial, isAdmin, openMenu) {
     q('#ir-transfer-entities').hidden=!!plan.error||!plan.changes.length;
     q('#ir-transfer-preview').innerHTML=plan.error?'':plan.changes.map(change=>'<div class="ir-transfer-entity"><span>'+escape(change.name)+'</span><code>Nueva: '+escape(change.to)+'</code></div>').join('');
     q('#ir-transfer-hint').textContent='La copia tendr\u00e1 sus propias entidades. El dispositivo original conservar\u00e1 las suyas y sus automatizaciones.';
-    const sourceEmitter=model.emitters.find(e=>e.id===transferringDevice.emitterId);q('#ir-transfer-signals').textContent=plan.target?.sourceId===sourceEmitter?.sourceId?'La copia conserva las se\u00f1ales del mismo emisor. Si el aparato f\u00edsico es distinto, vuelve a aprenderlas.':'En este emisor tendr\u00e1s que aprender y probar las se\u00f1ales de la copia. El dise\u00f1o y los botones se conservan.';
+    const sourceEmitter=model.emitters.find(e=>e.id===transferringDevice.emitterId);q('#ir-transfer-signals').textContent=plan.target?.sourceId===sourceEmitter?.sourceId?'La copia conserva las se\u00f1ales del mismo emisor. Si el aparato f\u00edsico es distinto, vuelve a aprenderlas.':'En este emisor tendr\u00e1s que aprender las se\u00f1ales de la copia. El dise\u00f1o y los botones se conservan.';
   }
   function openTransferDevice(emitterId,deviceId){
     if(!isAdmin)return;
@@ -502,27 +502,21 @@ export function mountStudio(root, api, initial, isAdmin, openMenu) {
     const emitter=getEmitter(),source=catalog.find(item=>item.id===emitter?.sourceId);
     if(!sourceAvailable(emitter?.sourceId)){functionError('El emisor est\u00e1 sin conexi\u00f3n.');return;}
     if(!source?.canLearn){functionError('Este emisor no admite aprendizaje.');return;}
-    cancelLearning();const request={draft,context:functionContext,key,cancelled:false};learningRequest=request;listening=key;renderLearning();
-    try{const result=await api.call('learn',{source_id:emitter.sourceId,device_id:functionContext.deviceId,function_key:draft.key,signal:key});if(!sameContext(request)||request.cancelled)return;if(!result.signal_ref)throw new Error('No se ha recibido una referencia de se\u00f1al.');candidateSignals[key]={ref:result.signal_ref,tested:false};feedback('Se\u00f1al preparada. Prueba la orden y confirma si ha respondido el aparato.');}
+    cancelLearning();const request={draft,context:functionContext,key,cancelled:false};learningRequest=request;listening=key;q('#ir-function-error').hidden=true;feedback('');renderLearning();
+    try{const result=await api.call('learn',{source_id:emitter.sourceId,device_id:functionContext.deviceId,function_key:draft.key,signal:key});if(!sameContext(request)||request.cancelled)return;if(!result.signal_ref||result.learned!==true)throw new Error('No se ha recibido una se\u00f1al aprendida. Vuelve a intentarlo.');draft.signal_refs??={};draft.signals??={};draft.signal_refs[key]=result.signal_ref;draft.signals[key]=true;feedback('Se\u00f1al aprendida. Guarda los cambios para conservarla. Puedes probarla si quieres.');}
     catch(error){if(sameContext(request)&&!request.cancelled)functionError(error.message||'No se pudo aprender la se\u00f1al. Vuelve a intentarlo.');}
     finally{if(learningRequest===request){learningRequest=null;listening=null;if(sameContext(request))renderLearning();}}
   }
   async function testSignal(key){
-    const candidate=candidateSignals[key];if(!candidate||signalBusy||listening)return;const request={context:functionContext,draft};signalBusy=true;renderLearning();
-    try{await api.call('test_signal',{signal_ref:candidate.ref});if(!sameContext(request))return;candidate.tested=true;feedback('Orden enviada. Comprueba el aparato antes de confirmar.');}
+    const signalRef=draft?.signal_refs?.[key];if(!isAdmin||!signalRef||!draft.signals?.[key]||!functionContext||!q('#ir-function-dialog').open||signalBusy||listening)return;const request={context:functionContext,draft};signalBusy=true;q('#ir-function-error').hidden=true;feedback('');renderLearning();
+    try{await api.call('test_signal',{signal_ref:signalRef});if(!sameContext(request))return;feedback('Se\u00f1al de prueba enviada. Puedes guardar los cambios directamente.');}
     catch(error){if(sameContext(request))functionError(error.message||'No se pudo enviar la prueba.');}
     finally{signalBusy=false;if(sameContext(request))renderLearning();}
   }
-  async function confirmSignal(key){
-    const candidate=candidateSignals[key];if(!candidate?.tested||signalBusy||listening)return;const request={context:functionContext,draft};signalBusy=true;renderLearning();
-    try{const result=await api.call('confirm_signal',{signal_ref:candidate.ref});if(!sameContext(request))return;if(!result.verified)throw new Error('La se\u00f1al no se ha verificado.');draft.signal_refs??={};draft.signal_refs[key]=candidate.ref;draft.signals[key]=true;delete candidateSignals[key];feedback('Se\u00f1al confirmada. Guarda la funci\u00f3n para conservarla.');}
-    catch(error){if(sameContext(request))functionError(error.message||'No se pudo confirmar la se\u00f1al.');}
-    finally{signalBusy=false;if(sameContext(request))renderLearning();}
-  }
   function renderLearning(){
-    if(!draft)return;const state=q('#ir-signal-status');state.dataset.state=ready(draft)?'ready':'pending';state.textContent=ready(draft)?'Se\u00f1al guardada':draft.type==='switch'?'Necesita dos se\u00f1ales':'Sin se\u00f1al';q('#ir-learning-stage').hidden=!listening;q('#ir-learning-controls').hidden=!!listening;
+    if(!draft)return;const state=q('#ir-signal-status');state.dataset.state=ready(draft)?'ready':'pending';state.textContent=ready(draft)?'Se\u00f1al disponible':draft.type==='switch'?'Necesita dos se\u00f1ales':'Sin se\u00f1al';q('#ir-learning-stage').hidden=!listening;q('#ir-learning-controls').hidden=!!listening;
     const channels=draft.type==='switch'?[['on','Encendido'],['off','Apagado']]:[['press','Pulsaci\u00f3n']];
-    q('#ir-learning-controls').innerHTML=channels.map(([key,label])=>{const candidate=candidateSignals[key],verified=!!draft.signals[key],disabled=signalBusy?' disabled':'';return '<div class="ir-signal-row"><strong>'+label+'</strong><span class="ir-muted"> \u00b7 '+(verified?'Se\u00f1al guardada':'Sin se\u00f1al')+'</span><div class="ir-signal-actions"><button type="button" class="ir-action" data-learn="'+key+'"'+disabled+'>'+glyph('scan-line')+(verified?'Volver a aprender':'Aprender del mando original')+'</button>'+(candidate?'<button type="button" class="ir-action ir-primary" data-test-signal="'+key+'"'+disabled+'>Probar se\u00f1al</button>':'')+'</div>'+(candidate?.tested?'<div class="ir-confirm-test"><p>\u00bfHa respondido correctamente el aparato?</p><button type="button" class="ir-action ir-primary" data-confirm-signal="'+key+'"'+disabled+'>S\u00ed, ha funcionado</button><button type="button" class="ir-text-action" data-retry-signal="'+key+'"'+disabled+'>No, volver a aprender</button></div>':'')+(candidate&&verified?'<p class="ir-control-hint">La se\u00f1al anterior se conserva hasta confirmar y guardar la nueva.</p>':'')+'</div>';}).join('')+(draft.type==='switch'?'<p class="ir-control-hint">Aprende dos \u00f3rdenes independientes de encendido y apagado. El estado ser\u00e1 estimado.</p>':'')+(false?'<p class="ir-control-hint">Algunos mandos de aire acondicionado transmiten tambi\u00e9n el modo, la temperatura y la ventilaci\u00f3n. La se\u00f1al aprendida puede recuperar todos esos ajustes.</p>':'');
+    q('#ir-learning-controls').innerHTML=channels.map(([key,label])=>{const learned=!!draft.signals[key],disabled=signalBusy?' disabled':'';return '<div class="ir-signal-row"><strong>'+label+'</strong><span class="ir-muted"> \u00b7 '+(learned?'Se\u00f1al disponible':'Sin se\u00f1al')+'</span><div class="ir-signal-actions"><button type="button" class="ir-action" data-learn="'+key+'"'+disabled+'>'+glyph('scan-line')+(learned?'Volver a aprender':'Aprender del mando original')+'</button>'+(learned&&draft.signal_refs?.[key]?'<button type="button" class="ir-action" data-test-signal="'+key+'"'+disabled+'>Probar se\u00f1al</button>':'')+'</div></div>';}).join('')+(draft.type==='switch'?'<p class="ir-control-hint">Aprende dos \u00f3rdenes independientes de encendido y apagado. El estado ser\u00e1 estimado.</p>':'');
     q('#ir-learning-title').textContent='Esperando la se\u00f1al'+(listening==='on'?' de encendido':listening==='off'?' de apagado':'')+'\u2026';
   }
   async function pressFunction(key){
@@ -571,8 +565,6 @@ export function mountStudio(root, api, initial, isAdmin, openMenu) {
     }
     if(t.dataset.learn)startLearning(t.dataset.learn);
     if(t.dataset.testSignal)testSignal(t.dataset.testSignal);
-    if(t.dataset.confirmSignal)confirmSignal(t.dataset.confirmSignal);
-    if(t.dataset.retrySignal)startLearning(t.dataset.retrySignal);
   });
   root.addEventListener('pointerdown',event=>{
     const tile=event.target.closest('.ir-command[data-function-key]'),device=getDevice();
@@ -710,7 +702,7 @@ export function mountStudio(root, api, initial, isAdmin, openMenu) {
   q('#ir-cancel-learn').addEventListener('click',()=>{cancelLearning();renderLearning();feedback('Aprendizaje cancelado.');});
   ['#ir-button-name','#ir-button-icon','#ir-button-color'].forEach(selector=>q(selector).addEventListener('input',updatePreview));
   ['input','change'].forEach(type=>q('#ir-show-name').addEventListener(type,updatePreview));
-  q('#ir-button-type').addEventListener('change',()=>{if(!draft)return;cancelLearning();draft.type=q('#ir-button-type').value;draft.signals={};draft.signal_refs={};candidateSignals={};updatePreview();renderLearning();});
+  q('#ir-button-type').addEventListener('change',()=>{if(!draft)return;cancelLearning();draft.type=q('#ir-button-type').value;draft.signals={};draft.signal_refs={};updatePreview();renderLearning();});
   q('#ir-save').addEventListener('click',()=>{
     if(!q('#ir-function-dialog').open||q('#ir-entity-dialog').open||q('#ir-delete-function-dialog').open||!draft)return;if(listening||signalBusy){functionError('Termina o cancela el aprendizaje antes de guardar.');return;}updatePreview();draft.name=draft.name.trim();if(!draft.name){functionError('Escribe un nombre para la funci\u00f3n.');return;}
     const context=functionContext,device=context&&model.emitters.find(e=>e.id===context.emitterId)?.devices.find(d=>d.id===context.deviceId);

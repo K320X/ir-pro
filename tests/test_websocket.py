@@ -27,7 +27,7 @@ class WebSocketTests(unittest.IsolatedAsyncioTestCase):
         self.manager = SimpleNamespace(
             envelope=Mock(return_value={"revision": 1}),
             async_save_model=AsyncMock(return_value={"revision": 2}),
-            async_learn=AsyncMock(return_value={"needs_test": True}),
+            async_learn=AsyncMock(return_value={"signal_ref": "reference", "learned": True, "needs_test": False}),
             async_test_signal=AsyncMock(return_value={"status": "sent_unconfirmed"}),
             async_confirm_signal=AsyncMock(return_value={"verified": True}),
             async_press=AsyncMock(return_value={"status": "sent_unconfirmed"}),
@@ -82,6 +82,20 @@ class WebSocketTests(unittest.IsolatedAsyncioTestCase):
                 getattr(self.manager, manager_method).assert_awaited_once()
                 connection.send_error.assert_not_called()
                 connection.send_result.assert_called_once()
+
+    async def test_learn_returns_ready_capture_without_testing_or_confirming(self):
+        connection = self.connection(admin=True)
+        await self.websocket.ws_learn(self.hass, connection, {
+            "id": 11, "source_id": "source", "device_id": "device",
+            "function_key": "function", "signal": "press",
+        })
+        self.manager.async_learn.assert_awaited_once_with("source", "device", "function", "press")
+        connection.send_result.assert_called_once_with(11, {
+            "signal_ref": "reference", "learned": True, "needs_test": False,
+        })
+        self.manager.async_test_signal.assert_not_awaited()
+        self.manager.async_confirm_signal.assert_not_awaited()
+        self.manager.async_press.assert_not_awaited()
 
     async def test_not_loaded_has_explicit_error_and_does_not_call_manager(self):
         connection = self.connection(admin=True)

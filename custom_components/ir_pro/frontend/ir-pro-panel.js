@@ -1,5 +1,5 @@
-import {template,styles} from './ir-pro-template.js';
-import {mountStudio} from './ir-pro-controller.js';
+import {template,styles} from './ir-pro-template.js?v=0.1.0b2';
+import {mountStudio} from './ir-pro-controller.js?v=0.1.0b2';
 
 class IRProPanel extends HTMLElement {
   constructor(){super();this.attachShadow({mode:'open'});this._hass=null;this._controller=null;this._loading=false;this._generation=0;}

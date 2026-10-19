@@ -18,6 +18,13 @@ ENTITY = re.compile(r"^(button|switch)\.[a-z0-9_]{1,240}$")
 COLOR = re.compile(r"^#[a-fA-F0-9]{6}$")
 
 
+def signal_is_learned(record: dict) -> bool:
+    """Accept a completed capture or a verified signal from the first beta."""
+    return record.get("captured") is True or (
+        record.get("tested") is True and record.get("verified") is True
+    )
+
+
 def _fail(message: str) -> None:
     raise IRProError("invalid_model", message)
 
@@ -188,7 +195,7 @@ def validate_model(
                     if record.get("signal") != signal:
                         raise IRProError("invalid_signal", "La señal no corresponde a esta función.")
                     refs[signal] = reference
-                    signals[signal] = bool(record.get("tested") and record.get("verified"))
+                    signals[signal] = signal_is_learned(record)
                 if cross_source:
                     refs, signals = {}, {}
                     notices.append("El mando se ha copiado a otro emisor. Aprende de nuevo sus señales.")

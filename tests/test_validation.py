@@ -141,14 +141,40 @@ class ValidationTests(unittest.TestCase):
     def test_claimed_learned_status_is_not_trusted(self):
         candidate = model_fixture()
         get_function(candidate)["signals"] = {"press": True, "on": True, "off": True}
+        get_function(candidate).update(captured=True, learned=True, tested=True, verified=True)
+        candidate["signals"] = {REF: signal_fixture(captured=True)}
         result, _ = self.validate_candidate(candidate)
         self.assertFalse(get_function(result)["signals"].get("press", False))
+        self.assertEqual(get_function(result)["signal_refs"], {})
+        for field in ("captured", "learned", "tested", "verified"):
+            self.assertNotIn(field, get_function(result))
 
     def test_verified_stored_reference_marks_button_learned(self):
         candidate = model_fixture()
         get_function(candidate)["signal_refs"] = {"press": REF}
         result, _ = self.validate_candidate(candidate, refs={REF: signal_fixture()})
         self.assertTrue(get_function(result)["signals"]["press"])
+
+    def test_server_captured_reference_is_learned_without_test_or_confirmation(self):
+        candidate = model_fixture()
+        get_function(candidate)["signal_refs"] = {"press": REF}
+        result, _ = self.validate_candidate(candidate, refs={
+            REF: signal_fixture(captured=True, tested=False, verified=False),
+        })
+        self.assertTrue(get_function(result)["signals"]["press"])
+
+    def test_capture_requires_literal_true_and_cannot_be_claimed_by_client(self):
+        for captured in (False, None, 1, "true"):
+            with self.subTest(captured=captured):
+                candidate = model_fixture()
+                function = get_function(candidate)
+                function["signal_refs"] = {"press": REF}
+                function.update(captured=True, learned=True)
+                function["signals"] = {"press": True}
+                result, _ = self.validate_candidate(candidate, refs={
+                    REF: signal_fixture(captured=captured, tested=False, verified=False),
+                })
+                self.assertFalse(get_function(result)["signals"].get("press", False))
 
     def test_unknown_reference_is_rejected(self):
         candidate = model_fixture()

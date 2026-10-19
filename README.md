@@ -6,7 +6,7 @@ Visual infrared remotes for Home Assistant.
 
 **0.1.0 beta** is the first experimental release. IR Pro starts empty: it does not import demo remotes, modify your existing scripts or take over physical devices.
 
-Build your own remotes with buttons, optional labels, icons, colors and independent grid rows. Learn commands from a physical remote, test them and expose real Home Assistant entities for automations.
+Build your own remotes with buttons, optional labels, icons, colors and independent grid rows. Learn commands from a physical remote, save them directly and expose real Home Assistant entities for automations. Testing a signal is optional.
 
 ## Install with HACS
 
@@ -28,7 +28,7 @@ This repository is installed as a custom HACS repository; it is not listed in th
 1. Add a recognized transmitter, then create a device with its name and icon.
 2. Open **Editar mando** and add a function. Choose a button for a single action, or a switch with separate on/off commands.
 3. Select **Aprender del mando original**, point the original remote at the Broadlink and press the required key.
-4. Use **Probar señal**. Confirm that the appliance responded before saving the function.
+4. Select **Guardar cambios** to keep the learned signal. **Probar señal** is optional and sends the command only when selected.
 5. Find the function's entity under **Entidad para automatizaciones**. It can be used by Home Assistant automations and scripts.
 
 Changes are stored in Home Assistant, not in browser storage. Transmitter selection uses stable entity registry IDs. Renaming a remote or function does not automatically change an existing entity ID.
@@ -37,7 +37,7 @@ Changes are stored in Home Assistant, not in browser storage. Transmitter select
 
 - Initially supports learning and sending through **Broadlink `remote` entities**. Other IR adapters are not supported yet.
 - IR is normally one-way. A successful send does not confirm delivery; switch state is estimated.
-- Some Home Assistant/Broadlink versions do not propagate every learning error. This beta requires a physical test and user confirmation rather than declaring capture success automatically.
+- A captured signal is immediately available for saving. IR Pro checks the stored command with zero repetitions through Broadlink's public service, without emitting infrared. This handles capture errors that the learning service may otherwise hide. Testing the appliance's response remains optional.
 - Many air conditioner remotes send the full configuration in one message. A learned “temperature up” key may replay a fixed temperature, mode and fan setting. Use explicit presets unless your protocol has been verified.
 - Duplicating preserves layout and presentation. Signals can be reused on the same transmitter. A copy created under another transmitter must learn its signals there; copying a flag cannot transfer Broadlink's stored codes.
 - Existing remotes cannot be moved between transmitters. Create a copy at its destination so the original entities remain intact.

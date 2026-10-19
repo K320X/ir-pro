@@ -14,7 +14,7 @@ from homeassistant.helpers.storage import Store
 
 from .const import DOMAIN, EMPTY_MODEL, LEARN_TIMEOUT, STORAGE_KEY, STORAGE_VERSION, VERSION
 from .errors import IRProError
-from .validation import validate_model
+from .validation import signal_is_learned, validate_model
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -77,7 +77,7 @@ class IRProManager:
             for device in emitter["devices"]:
                 for function in device["functions"]:
                     function["signals"] = {
-                        signal: self._verified_reference(function, emitter["sourceId"], signal)
+                        signal: self._learned_reference(function, emitter["sourceId"], signal)
                         for signal in function["signal_refs"]
                     }
         response = {
@@ -104,6 +104,7 @@ class IRProManager:
                 raise IRProError("storage_error", "Hay una referencia de señal guardada no válida.")
             record["tested"] = record.get("tested") is True
             record["verified"] = record.get("verified") is True
+            record["captured"] = record.get("captured") is True
         incoming = stored.get("model", EMPTY_MODEL)
         if not isinstance(incoming, dict) or type(stored.get("revision", 0)) is not int:
             raise IRProError("storage_error", "La configuración guardada de IR Pro no es válida.")
@@ -159,11 +160,11 @@ class IRProManager:
         except IRProError:
             return False
         required = ("press",) if function["type"] == "button" else ("on", "off")
-        return all(self._verified_reference(function, emitter["sourceId"], signal) for signal in required)
+        return all(self._learned_reference(function, emitter["sourceId"], signal) for signal in required)
 
-    def _verified_reference(self, function: dict, source_id: str, signal: str) -> bool:
+    def _learned_reference(self, function: dict, source_id: str, signal: str) -> bool:
         record = self.signals.get(function.get("signal_refs", {}).get(signal, ""))
-        return bool(record and record["source_id"] == source_id and record["signal"] == signal and record.get("tested") and record.get("verified"))
+        return bool(record and record["source_id"] == source_id and record["signal"] == signal and signal_is_learned(record))
 
     def _notify(self) -> None:
         for listener in tuple(self._listeners):
@@ -218,11 +219,15 @@ class IRProManager:
             self._notify()
             return self.envelope(notices)
 
-    async def _remote_call(self, source_id: str, service: str, record: dict) -> None:
+    async def _remote_call(self, source_id: str, service: str, record: dict, *, validate_only: bool = False) -> None:
         source, _ = self._source(source_id)
         data = {"entity_id": source.entity_id, "device": record["device"], "command": record["command"]}
         if service == "learn_command":
             data["command_type"] = "ir"
+        if validate_only:
+            # Broadlink validates the stored code before its repeat loop. Zero
+            # repetitions checks capture without sending data to the hardware.
+            data["num_repeats"] = 0
         try:
             await asyncio.wait_for(
                 self.hass.services.async_call("remote", service, data, blocking=True),
@@ -230,10 +235,11 @@ class IRProManager:
             )
         except asyncio.TimeoutError as err:
             self._cooldowns[source_id] = time.monotonic() + 35
-            raise IRProError("learn_failed" if service == "learn_command" else "command_failed", "El emisor no ha respondido a tiempo. Espera unos segundos y vuelve a intentarlo.") from err
+            raise IRProError("learn_failed" if service == "learn_command" or validate_only else "command_failed", "El emisor no ha respondido a tiempo. Espera unos segundos y vuelve a intentarlo.") from err
         except Exception as err:
             _LOGGER.debug("Broadlink %s failed", service, exc_info=True)
-            raise IRProError("learn_failed" if service == "learn_command" else "command_failed", "No se ha podido completar la operación con el emisor.") from err
+            message = "No se ha capturado una señal válida. Vuelve a aprenderla." if validate_only else "No se ha podido completar la operación con el emisor."
+            raise IRProError("learn_failed" if service == "learn_command" or validate_only else "command_failed", message) from err
 
     def _operation_lock(self, source_id: str) -> asyncio.Lock:
         if self._closing:
@@ -277,11 +283,17 @@ class IRProManager:
             record = {
                 "source_id": source_id, "device_id": device_id, "function_key": function_key,
                 "signal": signal, "device": "ir_pro_" + device_id,
-                "command": "ir_pro_" + uuid4().hex, "tested": False, "verified": False,
+                "command": "ir_pro_" + uuid4().hex, "captured": False,
+                "tested": False, "verified": False,
                 "created": time.time(),
             }
             try:
                 await self._remote_call(source_id, "learn_command", record)
+                # The native learning service can swallow capture timeouts.
+                # Validate the unique new command through its public service.
+                await self._remote_call(source_id, "send_command", record, validate_only=True)
+                self._source(source_id)
+                record["captured"] = True
                 async with self._lock:
                     current_emitter, _ = self._find_device(device_id)
                     if current_emitter["sourceId"] != source_id:
@@ -290,7 +302,7 @@ class IRProManager:
                     records[reference] = record
                     await self._write(self.model, records, self.revision)
                     self.signals = records
-                return {"signal_ref": reference, "needs_test": True}
+                return {"signal_ref": reference, "learned": True, "needs_test": False}
             finally:
                 self._operations.discard(task)
 
@@ -330,7 +342,7 @@ class IRProManager:
     async def async_press(self, function_key: str, desired: bool | None = None) -> dict:
         found = self.find_function(function_key)
         if not found or not self.function_available(function_key):
-            raise IRProError("invalid_signal", "La función no está disponible o necesita señales verificadas.")
+            raise IRProError("invalid_signal", "La función no está disponible o necesita aprender sus señales.")
         emitter, _, function = found
         async with self._tracked_operation(emitter["sourceId"]):
             # Re-read after acquiring the lock; a save may have deleted it.

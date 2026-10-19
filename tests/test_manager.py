@@ -41,8 +41,29 @@ class ManagerTests(unittest.IsolatedAsyncioTestCase):
         await self.manager.async_save_model(candidate, self.manager.revision)
         return reference
 
+    async def prepare_captured_button(self):
+        """Persist a successful capture without testing or confirming it."""
+        await self.save_fixture()
+        learned = await self.manager.async_learn(SOURCE, DEVICE, FUNCTION, "press")
+        reference = learned["signal_ref"]
+        candidate = self.manager.envelope()["model"]
+        get_function(candidate)["signal_refs"] = {"press": reference}
+        await self.manager.async_save_model(candidate, self.manager.revision)
+        return reference
+
     def calls(self, service):
-        return [call for call in self.hass.services.calls if call[1] == service]
+        """Count real transmissions separately from Broadlink zero-repeat checks."""
+        return [
+            call for call in self.hass.services.calls
+            if call[1] == service
+            and not (service == "send_command" and call[2].get("num_repeats") == 0)
+        ]
+
+    def validation_calls(self):
+        return [
+            call for call in self.hass.services.calls
+            if call[1] == "send_command" and call[2].get("num_repeats") == 0
+        ]
 
     async def test_initial_load_is_empty_and_never_sends(self):
         await self.manager.async_load()
@@ -83,18 +104,121 @@ class ManagerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.manager.envelope(), before)
         self.assertEqual(self.hass.storage, before_storage)
 
-    async def test_learn_does_not_send_or_trust_capture_without_user_test(self):
+    async def test_successful_learn_is_ready_to_save_without_transmitting(self):
         await self.save_fixture()
         result = await self.manager.async_learn(SOURCE, DEVICE, FUNCTION, "press")
         reference = result["signal_ref"]
-        self.assertTrue(result["needs_test"])
+        self.assertTrue(result["learned"])
+        self.assertFalse(result["needs_test"])
         self.assertEqual(len(self.calls("learn_command")), 1)
         self.assertEqual(self.calls("send_command"), [])
+        self.assertEqual(len(self.validation_calls()), 1)
+        validation = self.validation_calls()[0]
+        self.assertEqual(validation[0], "remote")
+        self.assertEqual(validation[2]["num_repeats"], 0)
+        self.assertEqual(validation[2]["command"], self.manager.signals[reference]["command"])
+        self.assertIs(validation[3], True)
+        self.assertIs(self.manager.signals[reference]["captured"], True)
         self.assertFalse(self.manager.signals[reference]["tested"])
         self.assertFalse(self.manager.signals[reference]["verified"])
+        # Learning a draft does not attach it before the user saves changes.
         self.assertFalse(self.manager.function_available(FUNCTION))
         with self.assertRaises(self.error):
             await self.manager.async_confirm_signal(reference)
+
+    async def test_captured_button_can_save_restart_and_press_without_optional_test(self):
+        reference = await self.prepare_captured_button()
+        self.assertTrue(get_function(self.manager.model)["signals"]["press"])
+        self.assertTrue(self.manager.function_available(FUNCTION))
+        self.assertEqual(len(self.calls("learn_command")), 1)
+        self.assertEqual(self.calls("send_command"), [])
+
+        restored = self.manager_class(self.hass, self.entry)
+        await restored.async_load()
+        self.assertTrue(restored.function_available(FUNCTION))
+        self.assertEqual(get_function(restored.model)["signal_refs"], {"press": reference})
+        self.assertIs(restored.signals[reference]["captured"], True)
+        self.assertFalse(restored.signals[reference]["tested"])
+        self.assertFalse(restored.signals[reference]["verified"])
+        self.assertEqual(self.calls("send_command"), [])
+
+        await restored.async_press(FUNCTION)
+        self.assertEqual(len(self.calls("send_command")), 1)
+        self.assertEqual(self.calls("send_command")[0][2]["command"], restored.signals[reference]["command"])
+        self.assertNotIn("num_repeats", self.calls("send_command")[0][2])
+
+    async def test_capture_is_not_trusted_until_zero_repeat_validation_finishes(self):
+        await self.save_fixture()
+        validating = asyncio.Event()
+        release = asyncio.Event()
+
+        async def wait_for_validation(_domain, service, data):
+            if service == "send_command":
+                self.assertEqual(data["num_repeats"], 0)
+                self.assertEqual(self.manager.signals, {})
+                self.assertFalse(self.manager.function_available(FUNCTION))
+                validating.set()
+                await release.wait()
+
+        self.hass.services.hook = wait_for_validation
+        operation = asyncio.create_task(self.manager.async_learn(SOURCE, DEVICE, FUNCTION, "press"))
+        await validating.wait()
+        try:
+            self.assertFalse(operation.done())
+            self.assertEqual(self.manager.signals, {})
+            self.assertEqual(self.calls("send_command"), [])
+            self.assertEqual(len(self.validation_calls()), 1)
+        finally:
+            release.set()
+        result = await operation
+        self.assertIs(self.manager.signals[result["signal_ref"]]["captured"], True)
+        self.assertTrue(result["learned"])
+        self.assertFalse(result["needs_test"])
+
+    async def test_missing_command_after_apparent_learning_success_does_not_create_reference(self):
+        await self.save_fixture()
+        before_storage = deepcopy(self.hass.storage)
+
+        async def missing_command(_domain, service, data):
+            if service == "send_command":
+                self.assertEqual(data["num_repeats"], 0)
+                raise RuntimeError("CommandNotFound: no code was learned")
+
+        self.hass.services.hook = missing_command
+        with self.assertRaises(self.error):
+            await self.manager.async_learn(SOURCE, DEVICE, FUNCTION, "press")
+        self.assertEqual(len(self.calls("learn_command")), 1)
+        self.assertEqual(len(self.validation_calls()), 1)
+        self.assertEqual(self.calls("send_command"), [])
+        self.assertEqual(self.manager.signals, {})
+        self.assertFalse(self.manager.function_available(FUNCTION))
+        self.assertEqual(self.hass.storage, before_storage)
+
+    async def test_missing_command_after_relearning_preserves_saved_signal(self):
+        previous = await self.prepare_captured_button()
+        before = deepcopy(self.manager.envelope())
+        before_records = deepcopy(self.manager.signals)
+        before_storage = deepcopy(self.hass.storage)
+        self.hass.services.calls.clear()
+
+        async def missing_command(_domain, service, data):
+            if service == "send_command":
+                self.assertEqual(data["num_repeats"], 0)
+                raise RuntimeError("CommandNotFound: no code was learned")
+
+        self.hass.services.hook = missing_command
+        with self.assertRaises(self.error):
+            await self.manager.async_learn(SOURCE, DEVICE, FUNCTION, "press")
+        self.assertEqual(self.manager.envelope(), before)
+        self.assertEqual(self.manager.signals, before_records)
+        self.assertEqual(self.hass.storage, before_storage)
+        self.assertTrue(self.manager.function_available(FUNCTION))
+        self.assertEqual(len(self.validation_calls()), 1)
+        self.assertEqual(self.calls("send_command"), [])
+        self.hass.services.hook = None
+        await self.manager.async_press(FUNCTION)
+        self.assertEqual(len(self.calls("send_command")), 1)
+        self.assertEqual(self.calls("send_command")[0][2]["command"], before_records[previous]["command"])
 
     async def test_learning_a_draft_function_requires_existing_device(self):
         await self.save_fixture()
@@ -128,7 +252,7 @@ class ManagerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.calls("send_command")[0][2]["entity_id"], "remote.ir_salon")
 
     async def test_relearning_keeps_previous_signal_until_new_reference_is_saved(self):
-        previous = await self.prepare_verified_button()
+        previous = await self.prepare_captured_button()
         previous_command = self.manager.signals[previous]["command"]
         self.hass.services.calls.clear()
         result = await self.manager.async_learn(SOURCE, DEVICE, FUNCTION, "press")
@@ -138,6 +262,14 @@ class ManagerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(get_function(self.manager.model)["signal_refs"]["press"], previous)
         await self.manager.async_press(FUNCTION)
         self.assertEqual(self.calls("send_command")[0][2]["command"], previous_command)
+        candidate = self.manager.envelope()["model"]
+        get_function(candidate)["signal_refs"] = {"press": replacement}
+        self.hass.services.calls.clear()
+        await self.manager.async_save_model(candidate, self.manager.revision)
+        self.assertTrue(self.manager.function_available(FUNCTION))
+        self.assertEqual(self.hass.services.calls, [])
+        await self.manager.async_press(FUNCTION)
+        self.assertEqual(self.calls("send_command")[0][2]["command"], self.manager.signals[replacement]["command"])
 
     async def test_offline_or_off_source_cannot_learn_test_or_press(self):
         reference = await self.prepare_verified_button()
@@ -183,6 +315,43 @@ class ManagerTests(unittest.IsolatedAsyncioTestCase):
             await self.manager.async_learn(SOURCE, DEVICE, FUNCTION, "press")
         self.assertEqual(self.manager.signals, before_records)
 
+    async def test_failed_capture_keeps_saved_signal_available(self):
+        previous = await self.prepare_captured_button()
+        before = deepcopy(self.manager.envelope())
+        before_records = deepcopy(self.manager.signals)
+        before_storage = deepcopy(self.hass.storage)
+
+        async def fail(*_args):
+            raise RuntimeError("Learning failed")
+
+        self.hass.services.hook = fail
+        self.hass.services.calls.clear()
+        with self.assertRaises(self.error) as caught:
+            await self.manager.async_learn(SOURCE, DEVICE, FUNCTION, "press")
+        self.assertEqual(caught.exception.code, "learn_failed")
+        self.assertEqual(self.manager.envelope(), before)
+        self.assertEqual(self.manager.signals, before_records)
+        self.assertEqual(self.hass.storage, before_storage)
+        self.assertEqual(self.calls("send_command"), [])
+        self.hass.services.hook = None
+        await self.manager.async_press(FUNCTION)
+        self.assertEqual(self.calls("send_command")[0][2]["command"], before_records[previous]["command"])
+
+    async def test_capture_persistence_failure_does_not_activate_replacement(self):
+        await self.prepare_captured_button()
+        before = deepcopy(self.manager.envelope())
+        before_records = deepcopy(self.manager.signals)
+        before_storage = deepcopy(self.hass.storage)
+        self.hass.fail_save = True
+        with self.assertRaises(self.error) as caught:
+            await self.manager.async_learn(SOURCE, DEVICE, FUNCTION, "press")
+        self.assertEqual(caught.exception.code, "storage_error")
+        self.assertEqual(self.manager.envelope(), before)
+        self.assertEqual(self.manager.signals, before_records)
+        self.assertEqual(self.hass.storage, before_storage)
+        self.assertTrue(self.manager.function_available(FUNCTION))
+        self.assertEqual(self.calls("send_command"), [])
+
     async def test_one_operation_per_source(self):
         await self.save_fixture()
         started = asyncio.Event()
@@ -227,20 +396,22 @@ class ManagerTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(self.manager.function_available(FUNCTION))
         self.assertEqual(self.hass.services.calls, [])
 
-    async def test_switch_requires_separate_verified_on_and_off_and_updates_only_after_send(self):
+    async def test_switch_requires_captured_on_and_off_without_test_and_updates_only_after_send(self):
         model = model_fixture()
         get_function(model).update(type="switch", entity="switch.ir_salon_split_salon_encender")
         await self.manager.async_save_model(model, 0)
         references = {}
         for signal in ("on", "off"):
             reference = (await self.manager.async_learn(SOURCE, DEVICE, FUNCTION, signal))["signal_ref"]
-            await self.manager.async_test_signal(reference)
-            await self.manager.async_confirm_signal(reference)
             references[signal] = reference
             candidate = deepcopy(self.manager.model)
             get_function(candidate)["signal_refs"] = dict(references)
             await self.manager.async_save_model(candidate, self.manager.revision)
             self.assertEqual(self.manager.function_available(FUNCTION), signal == "off")
+            self.assertEqual(self.calls("send_command"), [])
+            if signal == "on":
+                with self.assertRaises(self.error):
+                    await self.manager.async_press(FUNCTION, desired=True)
         self.assertIsNone(get_function(self.manager.model)["on"])
         self.hass.services.calls.clear()
         await self.manager.async_press(FUNCTION, desired=True)
@@ -273,6 +444,53 @@ class ManagerTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(self.error) as caught:
             await self.manager.async_learn(SOURCE, DEVICE, FUNCTION, "press")
         self.assertEqual(caught.exception.code, "busy")
+
+    async def test_timeout_does_not_replace_previously_captured_signal(self):
+        previous = await self.prepare_captured_button()
+        before_records = deepcopy(self.manager.signals)
+        before_storage = deepcopy(self.hass.storage)
+
+        async def never_respond(*_args):
+            await asyncio.Event().wait()
+
+        self.hass.services.hook = never_respond
+        with patch.object(self.manager_module, "LEARN_TIMEOUT", 0.01):
+            with self.assertRaises(self.error) as caught:
+                await self.manager.async_learn(SOURCE, DEVICE, FUNCTION, "press")
+        self.assertEqual(caught.exception.code, "learn_failed")
+        self.assertEqual(get_function(self.manager.model)["signal_refs"], {"press": previous})
+        self.assertEqual(self.manager.signals, before_records)
+        self.assertEqual(self.hass.storage, before_storage)
+        self.assertTrue(self.manager.function_available(FUNCTION))
+        self.assertEqual(self.calls("send_command"), [])
+
+    async def test_legacy_verified_signal_survives_restart_without_capture_flag(self):
+        model = model_fixture()
+        get_function(model)["signal_refs"] = {"press": REF}
+        self.hass.storage["ir_pro"] = {"model": model, "revision": 2, "signals": {REF: signal_fixture()}}
+        await self.manager.async_load()
+        self.assertTrue(self.manager.function_available(FUNCTION))
+        self.assertEqual(self.hass.services.calls, [])
+        await self.manager.async_press(FUNCTION)
+        self.assertEqual(len(self.calls("send_command")), 1)
+
+    async def test_legacy_unverified_draft_is_not_promoted_to_capture_on_load(self):
+        for overrides in ({"tested": False, "verified": False}, {"verified": False}):
+            with self.subTest(overrides=overrides):
+                model = model_fixture()
+                get_function(model)["signal_refs"] = {"press": REF}
+                self.hass.storage["ir_pro"] = {
+                    "model": model, "revision": 2,
+                    "signals": {REF: signal_fixture(**overrides)},
+                }
+                restored = self.manager_class(self.hass, self.entry)
+                await restored.async_load()
+                self.assertFalse(restored.function_available(FUNCTION))
+                self.assertIsNot(restored.signals[REF].get("captured"), True)
+                self.assertFalse(get_function(restored.model)["signals"].get("press", False))
+                with self.assertRaises(self.error):
+                    await restored.async_press(FUNCTION)
+                self.assertEqual(self.hass.services.calls, [])
 
     async def test_unload_cancels_inflight_learning_without_saving_false_success(self):
         await self.save_fixture()
