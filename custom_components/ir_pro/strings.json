@@ -1,0 +1,14 @@
+{
+  "title": "IR Pro",
+  "config": {
+    "step": {
+      "user": {
+        "title": "IR Pro",
+        "description": "Crea mandos visuales con tus emisores Broadlink existentes. La integración comienza vacía. Añade los emisores y dispositivos desde el panel IR Pro."
+      }
+    },
+    "abort": {
+      "already_configured": "IR Pro ya está configurado."
+    }
+  }
+}

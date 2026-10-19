@@ -1,0 +1,14 @@
+{
+  "title": "IR Pro",
+  "config": {
+    "step": {
+      "user": {
+        "title": "IR Pro",
+        "description": "Create visual remotes using existing Broadlink transmitters. IR Pro starts empty. Add transmitters and virtual devices in its panel."
+      }
+    },
+    "abort": {
+      "already_configured": "IR Pro is already configured."
+    }
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "domain": "ir_pro",
+  "name": "IR Pro",
+  "after_dependencies": [
+    "broadlink"
+  ],
+  "codeowners": [
+    "@K320X"
+  ],
+  "config_flow": true,
+  "dependencies": [
+    "frontend",
+    "http",
+    "panel_custom",
+    "websocket_api"
+  ],
+  "documentation": "https://github.com/K320X/ir-pro",
+  "integration_type": "helper",
+  "iot_class": "assumed_state",
+  "issue_tracker": "https://github.com/K320X/ir-pro/issues",
+  "version": "0.1.0b1"
+}
