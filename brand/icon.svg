@@ -4,5 +4,8 @@
   <rect x="30" y="32" width="48" height="80" rx="13" fill="none" stroke="#ff725e" stroke-width="7"/>
   <circle cx="54" cy="51" r="7" fill="#ff725e"/>
   <g fill="#f1f6fa"><rect x="40" y="69" width="10" height="10" rx="3"/><rect x="58" y="69" width="10" height="10" rx="3"/><rect x="40" y="87" width="10" height="10" rx="3"/><rect x="58" y="87" width="10" height="10" rx="3"/></g>
-  <g fill="none" stroke="#ff725e" stroke-width="7" stroke-linecap="round"><path d="M87 35a19 19 0 0 0-19-19"/><path d="M106 35A38 38 0 0 0 68-3" transform="translate(0 7)"/></g>
+  <g transform="translate(68 42)" fill="none" stroke="#ff725e" stroke-width="7" stroke-linecap="round">
+    <path d="M19 0A19 19 0 0 0 0-19"/>
+    <path d="M38 0A38 38 0 0 0 0-38"/>
+  </g>
 </svg>
