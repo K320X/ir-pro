@@ -35,3 +35,15 @@ reconcileCanonical(stateModel,collision);
 assert.equal(node.entity,'button.accessory_2');
 assert.equal(node.signal_refs.press,'real-reference');
 console.log('Frontend model: legacy identities, switch state, nested/state layout, trusted readiness and delayed-save reconciliation passed.');
+
+// Reversing pictograms never migrates a stored position or its captured signal.
+for(let position=1;position<=6;position++){
+ const original=structuredClone(stateful),device=original.emitters[0].devices[0];
+ device.studio.state.swing='position_'+position;
+ device.studio.savedStates[0].settings={...device.studio.state};
+ const output=exportModel(importModel(original)).emitters[0].devices[0];
+ assert.equal(output.studio.state.swing,'position_'+position);
+ assert.equal(output.studio.savedStates[0].settings.swing,'position_'+position);
+ assert.deepEqual(output.functions.map(fn=>[fn.key,fn.entity,fn.type,fn.signal_refs]),device.functions.map(fn=>[fn.key,fn.entity,fn.type,fn.signal_refs]));
+}
+console.log('All six saved swing positions retain their IDs, settings, entities and learned references.');

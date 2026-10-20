@@ -4,6 +4,7 @@ import vm from 'node:vm';
 import {randomUUID} from 'node:crypto';
 import {styles} from '../custom_components/ir_pro/frontend/ir-pro-theme.js';
 import {exportModel} from '../custom_components/ir_pro/frontend/ir-pro-model.js';
+import {icon as renderIcon} from '../custom_components/ir_pro/frontend/ir-pro-icons.js';
 
 // Execute the actual controller render functions. This catches reentrant routing
 // after a failed creation; a separate implementation of render would miss it.
@@ -87,3 +88,52 @@ vm.createContext(sendContext);vm.runInContext(extract('commitState'),sendContext
 assert.equal(await vm.runInContext("commitState(d,'Preparado',true)",sendContext),false);assert.equal(sends,0);
 learned=true;assert.equal(await vm.runInContext("commitState(d,'Enviar',true)",sendContext),false);assert.equal(sends,1);assert.equal(sendFailure.code,'invalid_signal');
 console.log('Frontend rendering, quiet accessible feedback, state remote defaults, canonical entities and unlearned-send guards passed.');
+
+// Official state folders render the current state without rewriting their name,
+// chosen color, configured icon, state identity or learned references.
+const symbolContext={editing:false,esc:String,glyph:name=>'<glyph data-name="'+name+'"></glyph>',dualPowerLinked:()=>false,dualStateIndex:()=>0};
+vm.createContext(symbolContext);
+const options=source.slice(source.indexOf('  const modes ='),source.indexOf('  const symbols ='));
+const clampDefinition=source.split('\n').find(line=>line.trimStart().startsWith('const clamp ='));
+const modeDefinition=source.split('\n').find(line=>line.trimStart().startsWith('const currentMode ='));
+vm.runInContext(clampDefinition+'\n'+options+'\n'+modeDefinition+'\n'+extract('buttonSymbol')+'\n'+extract('buttonHTML'),symbolContext);
+const stateRemote={type:'stateful',state:{power:false,mode:'heat',temperature:24,fan:'auto',swing:'off'}};
+const stateFolder={id:'folder',type:'group',group:'fan',name:'Mi ventilador',icon:'settings',color:'#ad68cb',showName:true,fanSpeedCount:5};
+symbolContext.d=stateRemote;symbolContext.b=stateFolder;symbolContext.r={id:'row'};
+const originalFolder=JSON.stringify(stateFolder);
+const symbol=()=>vm.runInContext('buttonSymbol(d,b)',symbolContext);
+assert.equal(symbol(),'auto');
+for(const [level,value] of ['low','medium','high','speed_4','speed_5'].entries()){
+ stateRemote.state.fan=value;assert.equal(symbol(),'fan-speed-5-'+(level+1));
+}
+stateFolder.fanSpeedCount=2;stateRemote.state.fan='speed_5';assert.equal(symbol(),'fan-speed-5-5');assert.equal(stateFolder.fanSpeedCount,2);
+stateRemote.state.fan='low';assert.equal(symbol(),'fan-speed-2-1');
+stateFolder.fanSpeedCount=5;stateRemote.state.fan='auto';assert.equal(JSON.stringify(stateFolder),originalFolder);
+for(const [value,expected] of [['cool','snowflake'],['heat','sun'],['dry','droplet'],['fan','fan'],['auto','auto']]){
+ stateFolder.group='mode';stateRemote.state.mode=value;assert.equal(symbol(),expected);
+}
+stateFolder.group='swing';
+for(const value of ['off','auto',...Array.from({length:6},(_,i)=>'position_'+(i+1))]){
+ stateRemote.state.swing=value;assert.equal(symbol(),value==='off'?'swing-off':value==='auto'?'swing':'swing-'+value.replace('_','-'));
+}
+stateRemote.state.swing='position_2';
+let folderHTML=vm.runInContext('buttonHTML(d,b,r,0)',symbolContext);
+assert.match(folderHTML,/data-name="swing-position-2"/);assert.match(folderHTML,/aria-label="Mi ventilador"/);assert.match(folderHTML,/--button-color:#ad68cb/);assert.match(folderHTML,/title="Oscilación posición 2"/);assert.match(folderHTML,/>Mi ventilador<\/span>/);
+symbolContext.editing=true;folderHTML=vm.runInContext('buttonHTML(d,b,r,0)',symbolContext);assert.match(folderHTML,/Editar carpeta/);assert.match(folderHTML,/data-name="swing-position-2"/);
+stateFolder.group='custom';stateFolder.name='Ventilador';assert.equal(symbol(),'settings');
+stateFolder.group='fan';stateRemote.type='simple';assert.equal(symbol(),'settings');
+stateRemote.type='stateful';stateFolder.type='button';assert.equal(symbol(),'settings');
+assert.match(source,/symbol=buttonSymbol\(d,draft,visual\)/,'Editing preview uses the same state symbol as the remote');
+
+// Position IDs and labels remain stable; only their pictograms reverse. One is
+// vertical/down and six is horizontal/up, with one active ray per fixed position.
+const expectedRays=['M17 13V21','M15.146 12.706 12.674 20.315','M13.473 11.854 8.771 18.326','M12.146 10.527 5.674 15.229','M11.294 8.854 3.685 11.326','M11 7H3'];
+for(let position=1;position<=6;position++){
+ const rays=[...renderIcon('swing-position-'+position).matchAll(/<path d="([^"]+)"([^>]*)\/>/g)].slice(1);
+ assert.equal(rays.length,6);assert.deepEqual(rays.filter(([,path,attrs])=>!attrs.includes('opacity')).map(([,path])=>path),[expectedRays[position-1]]);
+ assert.equal(rays.filter(([,path,attrs])=>attrs.includes('opacity=".18"')).length,5);
+}
+assert.equal([...renderIcon('swing').matchAll(/<path /g)].length,7);
+assert.ok(!renderIcon('swing').includes('opacity'));
+assert.equal([...renderIcon('swing-off').matchAll(/<path /g)].length,1);
+console.log('Live folder icons, unchanged labels/colors, editing preview and six reversed swing pictograms passed.');

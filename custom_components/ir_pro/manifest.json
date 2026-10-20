@@ -18,5 +18,5 @@
   "integration_type": "helper",
   "iot_class": "assumed_state",
   "issue_tracker": "https://github.com/K320X/ir-pro/issues",
-  "version": "0.2.0b4"
+  "version": "0.2.0b5"
 }

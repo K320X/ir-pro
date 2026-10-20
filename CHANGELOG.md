@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.0b5
+
+- Show the current mode, fan speed and swing position directly on their state remote folder buttons.
+- Match the six swing position icons to the physical remote numbering, without changing saved identifiers, signals or entities.
+
 ## 0.2.0b4
 
 - Keep the remote DOM and scroll position stable when unrelated Home Assistant states change or an unchanged model is received.

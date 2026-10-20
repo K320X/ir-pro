@@ -1,6 +1,6 @@
-import {icon} from './ir-pro-icons.js?v=0.2.0b4';
-import {importModel,exportModel,reconcileCanonical} from './ir-pro-model.js?v=0.2.0b4';
-import {mountIconPickers} from './ir-pro-pickers.js?v=0.2.0b4';
+import {icon} from './ir-pro-icons.js?v=0.2.0b5';
+import {importModel,exportModel,reconcileCanonical} from './ir-pro-model.js?v=0.2.0b5';
+import {mountIconPickers} from './ir-pro-pickers.js?v=0.2.0b5';
 export function mountStudio(root,api,initial,isAdmin,openMenu) {
   const scope=root.getRootNode(),lifecycle=new AbortController();
   let disposed=false,catalog=initial.catalog||[],revision=initial.revision||0,saveQueue=Promise.resolve(true),saveFailed=false,actionError='',signalBusy=false,operation=0,pendingSaves=0,unsubscribe=null,lastAmbientSnapshot='',deferredEnvelope=null,scrollGeneration=0,inputGeneration=0,lastRenderedRoute='';
@@ -342,16 +342,27 @@ export function mountStudio(root,api,initial,isAdmin,openMenu) {
       '<div class="display-readings'+(hasAmbient?' has-ambient':'')+'"'+(!target&&!hasAmbient?' hidden':'')+'><div class="display-ambient-slot" data-ambient-kind="humidity">'+humidity+'</div><div class="display-target">'+target+'</div><div class="display-ambient-slot" data-ambient-kind="temperature">'+ambient+'</div></div>'+
       '<div class="display-bottom">'+modePart+fansPart+swingPart+'</div></div>';
   }
+  function buttonSymbol(d,b,visual=b) {
+    if(d.type!=='stateful'||b.type!=='group')return visual.icon;
+    if(b.group==='mode')return currentMode(d.state).icon;
+    if(b.group==='fan'){
+      const level=fans.findIndex(speed=>speed.value===d.state.fan);
+      if(level===0)return 'auto';
+      if(level>0)return 'fan-speed-'+Math.max(clamp(b.fanSpeedCount,2,5,3),level)+'-'+level;
+    }
+    if(b.group==='swing')return swingStates.find(option=>option.value===swingValue(d.state))?.icon||visual.icon;
+    return visual.icon;
+  }
   function buttonHTML(d,b,r,index) {
     if (!b) return editing ? '<button type="button" class="empty-slot" data-add-slot="'+esc(r.id)+'" data-index="'+index+'" data-drop-row="'+esc(r.id)+'" data-drop-index="'+index+'">'+glyph('plus')+'<span>Añadir elemento</span></button>' : '<div class="empty-slot" style="visibility:hidden" aria-hidden="true"></div>';
     const dual=b.type==='dual',visual=dual?dualActions(b,d)[dualStateIndex(d,b)]:b;
-    let symbol=visual.icon;
-    if (b.type==='group' && b.group==='mode') symbol=currentMode(d.state).icon;
+    const symbol=buttonSymbol(d,b,visual);
+    const stateTitle=d.type==='stateful'&&b.type==='group'?(b.group==='mode'?'Modo: '+currentMode(d.state).name:b.group==='fan'?fanDescription(d.state.fan):b.group==='swing'?swingDescription(d.state):''):'';
     const unavailable=d.type==='stateful' && ['temp_up','temp_down'].includes(visual.action) && !temperatureAvailable(d);
     const pressed=dualPowerLinked(d,b)?d.state.power:dualStateIndex(d,b)===1;
     const visibleText=visual.name;
     const label=dual?b.name+': '+(visibleText||visual.name||actionOptions.find(action=>action.value===visual.action)?.name||'Acción'):b.name;
-    return '<button type="button" class="remote-button'+(b.type==='group'?' is-group':'')+(dual?' is-dual':'')+(dual&&pressed?' is-on':'')+'" style="--button-color:'+esc(visual.color)+(editing?';touch-action:none;user-select:none':'')+'" data-button="'+esc(b.id)+'" data-drop-row="'+esc(r.id)+'" data-drop-index="'+index+'"'+(editing?' draggable="true"':'')+(dual?' aria-pressed="'+pressed+'"':'')+(unavailable&&!editing?' disabled title="Este modo no permite ajustar la temperatura"':'')+' aria-label="'+esc(label)+'">'+
+    return '<button type="button" class="remote-button'+(b.type==='group'?' is-group':'')+(dual?' is-dual':'')+(dual&&pressed?' is-on':'')+'" style="--button-color:'+esc(visual.color)+(editing?';touch-action:none;user-select:none':'')+'" data-button="'+esc(b.id)+'" data-drop-row="'+esc(r.id)+'" data-drop-index="'+index+'"'+(editing?' draggable="true"':'')+(dual?' aria-pressed="'+pressed+'"':'')+(unavailable&&!editing?' disabled title="Este modo no permite ajustar la temperatura"':'')+' aria-label="'+esc(label)+'"'+(stateTitle?' title="'+esc(stateTitle)+'"':'')+'>'+
       (editing?'<span class="button-top">'+(b.type==='group'?'Editar carpeta':'Editar función')+'</span>':'')+
       (symbol!=='none'?'<span class="button-symbol">'+glyph(symbol)+'</span>':'')+
       (visual.showName?'<span class="button-label">'+esc(visibleText)+'</span>':'')+
@@ -711,8 +722,8 @@ export function mountStudio(root,api,initial,isAdmin,openMenu) {
     };
     const preview=()=>{
       const target=$('#button-live');if(!target)return;
-      const visual=draft.type==='dual'?draft.actions[previewSide]:draft;
-      const card='<button type="button" class="remote-button" style="--button-color:'+esc(visual.color)+';width:112px;height:112px" aria-label="Vista previa">'+(visual.icon!=='none'?'<span class="button-symbol">'+glyph(visual.icon)+'</span>':'')+(visual.showName?'<span class="button-label">'+esc(visual.name)+'</span>':'')+'</button>';
+      const visual=draft.type==='dual'?draft.actions[previewSide]:draft,symbol=buttonSymbol(d,draft,visual);
+      const card='<button type="button" class="remote-button" style="--button-color:'+esc(visual.color)+';width:112px;height:112px" aria-label="Vista previa">'+(symbol!=='none'?'<span class="button-symbol">'+glyph(symbol)+'</span>':'')+(visual.showName?'<span class="button-label">'+esc(visual.name)+'</span>':'')+'</button>';
       target.innerHTML=draft.type==='display'?displayHTML(d,displayDraft,true):draft.type==='dual'?'<div class="dual-preview-wrap"><div class="dual-preview-tabs">'+[0,1].map(index=>'<button type="button" class="btn text'+(index===previewSide?' selected':'')+'" data-preview-side="'+index+'" aria-pressed="'+(index===previewSide)+'">Acción '+(index+1)+'</button>').join('')+'</div>'+card+'</div>':card;
       $$('[data-preview-side]',target).forEach(button=>button.addEventListener('click',()=>{previewSide=Number(button.dataset.previewSide);renderDual();preview();},{signal:modalAbort.signal}));
       renderEntityFields();
@@ -770,8 +781,8 @@ export function mountStudio(root,api,initial,isAdmin,openMenu) {
         if(draft.group==='fan'){draft.fanSpeedCount=clamp(draft.fanSpeedCount,2,5,3);draft.fanAuto=draft.fanAuto!==false;}
         if(draft.group==='swing'){draft.swingPositionCount=clamp(draft.swingPositionCount,1,6,6);draft.swingAuto=draft.swingAuto!==false;draft.swingOff=draft.swingOff!==false;}
         target.innerHTML=field('Contenido de la carpeta','<select id="group-kind">'+selectOptions(groups,draft.group)+'</select>')+(draft.group==='custom'?'<div id="folder-children" class="stack"></div>':draft.group==='fan'?field('Cantidad de velocidades','<select id="fan-speed-count">'+selectOptions([2,3,4,5].map(n=>({value:String(n),name:String(n)})),String(draft.fanSpeedCount))+'</select>')+checkField('fan-auto','Tiene modo automático',draft.fanAuto):draft.group==='swing'?field('Cantidad de posiciones fijas','<select id="swing-position-count">'+selectOptions([1,2,3,4,5,6].map(n=>({value:String(n),name:String(n)})),String(draft.swingPositionCount))+'</select>')+checkField('swing-auto','Tiene oscilación automática',draft.swingAuto)+checkField('swing-off','Permite desactivar la oscilación',draft.swingOff):'<p class="muted small">La carpeta abre una tarjeta centrada con las opciones del mando.</p>');
-        $('#group-kind')?.addEventListener('change',event=>{draft.group=event.target.value;if(draft.group==='swing'&&['folder','wind'].includes(draft.icon)){draft.icon='swing';$('#button-icon').value='swing';$('#button-icon').dispatchEvent(new Event('change',{bubbles:true}));}renderActionFields();},{signal:modalAbort.signal});
-        $('#fan-speed-count')?.addEventListener('change',event=>{draft.fanSpeedCount=clamp(event.target.value,2,5,3);},{signal:modalAbort.signal});
+        $('#group-kind')?.addEventListener('change',event=>{draft.group=event.target.value;if(draft.group==='swing'&&['folder','wind'].includes(draft.icon)){draft.icon='swing';$('#button-icon').value='swing';$('#button-icon').dispatchEvent(new Event('change',{bubbles:true}));}renderActionFields();preview();},{signal:modalAbort.signal});
+        $('#fan-speed-count')?.addEventListener('change',event=>{draft.fanSpeedCount=clamp(event.target.value,2,5,3);preview();},{signal:modalAbort.signal});
         $('input[name="fan-auto"]',target)?.addEventListener('change',event=>{draft.fanAuto=event.target.checked;},{signal:modalAbort.signal});
         $('#swing-position-count')?.addEventListener('change',event=>{draft.swingPositionCount=clamp(event.target.value,1,6,6);},{signal:modalAbort.signal});
         $('input[name="swing-auto"]',target)?.addEventListener('change',event=>{draft.swingAuto=event.target.checked;},{signal:modalAbort.signal});
