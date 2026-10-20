@@ -49,6 +49,9 @@ def independent_fixture():
             "value": next(iter(function["state_effect"].values())),
             "state_effect": deepcopy(function["state_effect"]),
         }])
+    state = get_studio(model)["savedStates"][0]
+    state["controlled_fields"] = ["power", "mode", "temperature"]
+    state["settings"] = {field: state["settings"][field] for field in state["controlled_fields"]}
     records = {reference: signal_fixture(function_key=key, command="command-" + key, captured=True)
                for key, reference in ((FUNCTION, REF), (FAN, FAN_REF), (SWING, SWING_REF))}
     return model, records
@@ -65,7 +68,7 @@ class IndependentValidationTests(unittest.TestCase):
         return self.validate(candidate, current or empty_model(), {SOURCE}, records or {}, set())[0]
 
     def test_effect_is_one_absolute_mode_fan_or_swing_only(self):
-        for value in (None, [], {}, {"power": True}, {"temperature": 24}, {"fan": True},
+        for value in (None, [], {}, {"power": 1}, {"temperature": 24}, {"fan": True},
                       {"mode": "invalid"}, {"swing": "toggle"}, {"toString": "auto"},
                       {"fan": "high", "swing": "auto"}, {1: "auto"}):
             with self.subTest(value=value), self.assertRaises(self.error):
@@ -75,10 +78,11 @@ class IndependentValidationTests(unittest.TestCase):
 
     def test_nested_hidden_actions_are_canonical_and_keep_captures(self):
         model, records = independent_fixture()
+        current = self.check(model, records=records)
         folder = get_studio(model)["rows"][1]["cells"][1]
         folder.update(sendMode="settings", fanAuto=False, fanSpeedCount=2)
         before = deepcopy(model)
-        result = self.check(model, records=records)
+        result = self.check(model, current=current, records=records)
         self.assertEqual(model, before)
         action = get_studio(result)["rows"][1]["cells"][1]["independentActions"][0]
         function = result["emitters"][0]["devices"][0]["functions"][1]

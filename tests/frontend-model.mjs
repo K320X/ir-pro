@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import {importModel,exportModel,reconcileCanonical} from '../custom_components/ir_pro/frontend/ir-pro-model.js';
+import {importModel,exportModel,reconcileCanonical,STATE_FIELDS,controlledStateFields,recordStateFields,projectState,findSavedState} from '../custom_components/ir_pro/frontend/ir-pro-model.js';
 
 const fn=(key,type='button',refs={press:'real-reference'})=>({key,name:key,showName:true,icon:'power',color:'#56c4ed',type,entity:type+'.'+key,signals:Object.fromEntries(Object.keys(refs).map(signal=>[signal,true])),signal_refs:refs,on:type==='switch'?true:null});
 const legacy={version:2,emitters:[{id:'emitter',sourceId:'registry-source',name:'IR salón',model:'RM4 mini',devices:[{id:'remote',name:'Televisor',icon:'tv',functions:[fn('power'),fn('toggle','switch',{on:'on-ref',off:'off-ref'})],layout:{heightScale:'square-at-two',rows:[{id:'row',columns:2,height:2,cells:['power','toggle']}]}}]}]};
@@ -47,3 +47,33 @@ for(let position=1;position<=6;position++){
  assert.deepEqual(output.functions.map(fn=>[fn.key,fn.entity,fn.type,fn.signal_refs]),device.functions.map(fn=>[fn.key,fn.entity,fn.type,fn.signal_refs]));
 }
 console.log('All six saved swing positions retain their IDs, settings, entities and learned references.');
+
+// Eight independent swing signals remain ordinary functions, never complete
+// states. A new climate capture controls four fields at every louver position.
+const scoped=structuredClone(stateModel),scopedDevice=scoped.emitters[0].devices[0];
+scopedDevice.savedStates=[];scopedDevice.rows=[{id:'swing-row',type:'buttons',columns:2,height:2,cells:[{id:'swing-folder',type:'group',group:'swing',sendMode:'independent',independentActions:Array.from({length:8},(_,index)=>({id:'swing-'+index,type:'button',action:'learned',name:'Swing '+index,value:index<6?'position_'+(index+1):index===6?'auto':'off',state_effect:{swing:index<6?'position_'+(index+1):index===6?'auto':'off'},entity:'button.swing_'+index,signals:{press:true},signal_refs:{press:'swing-ref-'+index}}))},{id:'light',type:'button',action:'learned',name:'Luz',entity:'button.luz'}]}];
+scopedDevice.state={power:true,mode:'cool',temperature:24,fan:'high',swing:'position_1'};
+const independentBefore=JSON.stringify(scopedDevice.rows[0].cells[0].independentActions);
+assert.equal(exportModel(scoped).emitters[0].devices[0].studio.savedStates.length,0);
+assert.deepEqual(controlledStateFields(scopedDevice),['power','mode','temperature','fan']);
+const captured={id:'climate',name:'Encendido · Frío · 24 °C · Ventilador 3',entity:'button.frio_24_ventilador_3',settings:projectState(scopedDevice.state,controlledStateFields(scopedDevice)),controlled_fields:controlledStateFields(scopedDevice),signal:{kind:'learned',id:'climate-ref'}};
+scopedDevice.savedStates.push(captured);assert.ok(!Object.hasOwn(captured.settings,'swing'));
+for(const swing of ['off','auto',...Array.from({length:6},(_,index)=>'position_'+(index+1))]){scopedDevice.state.swing=swing;assert.equal(findSavedState(scopedDevice)?.id,'climate');}
+assert.equal(JSON.stringify(scopedDevice.rows[0].cells[0].independentActions),independentBefore);
+const scopedWire=exportModel(scoped),scopedRound=importModel(scopedWire).emitters[0].devices[0];
+assert.deepEqual(scopedRound.savedStates[0].settings,captured.settings);assert.deepEqual(scopedRound.savedStates[0].controlled_fields,captured.controlled_fields);
+const old={id:'legacy',name:'Nombre original',entity:'button.original',settings:{...scopedDevice.state},signal:{kind:'learned',id:'legacy-ref'}};
+scopedDevice.savedStates=[old];const unchanged=JSON.stringify(old);assert.equal(findSavedState(scopedDevice),undefined,'A wider legacy capture cannot substitute for the active scope');assert.equal(JSON.stringify(old),unchanged);
+scopedDevice.rows[0].cells[0].sendMode='settings';assert.deepEqual(controlledStateFields(scopedDevice),STATE_FIELDS);assert.equal(findSavedState(scopedDevice)?.id,'legacy');
+const explicit={...structuredClone(old),id:'explicit',controlled_fields:[...STATE_FIELDS]};scopedDevice.savedStates.push(explicit);assert.equal(findSavedState(scopedDevice)?.id,'explicit');scopedDevice.savedStates.push({...explicit,id:'duplicate'});assert.equal(findSavedState(scopedDevice),undefined,'Ambiguous equivalents never pick an arbitrary signal');
+scopedDevice.rows[0].cells[0].sendMode='independent';scopedDevice.rows[0].cells.push({type:'group',group:'custom',children:[{type:'group',group:'fan',sendMode:'independent'},{type:'group',group:'mode',sendMode:'independent'}]});
+assert.deepEqual(controlledStateFields(scopedDevice),['power','temperature']);
+assert.deepEqual(controlledStateFields({...scopedDevice,rows:[]}),STATE_FIELDS,'Deleting controls does not reinterpret existing full states');
+assert.deepEqual(controlledStateFields(scopedDevice,{power:false}),['power']);assert.deepEqual(projectState({power:false,mode:'heat'},STATE_FIELDS),{power:false});assert.deepEqual(recordStateFields({settings:{power:false}}),['power']);
+scopedDevice.savedStates=[{id:'mode-free',controlled_fields:['power','temperature'],settings:{power:true,temperature:24}}];scopedDevice.state={power:true,mode:'dry',temperature:25,fan:'high',swing:'off'};assert.equal(findSavedState(scopedDevice),undefined,'Temperature remains significant when mode is independently controlled');scopedDevice.state.temperature=24;assert.equal(findSavedState(scopedDevice)?.id,'mode-free');
+scopedDevice.rows=[];scopedDevice.savedStates=[{id:'dry-full',settings:{power:true,mode:'dry',temperature:20,fan:'high',swing:'off'}}];scopedDevice.state.temperature=29;assert.equal(findSavedState(scopedDevice)?.id,'dry-full','Dry ignores temperature only in a scope that includes mode');
+scopedDevice.rows=[{type:'buttons',cells:[{type:'dual',sendMode:'independent',actions:[{action:'power_on'},{action:'power_off'}]}]}];scopedDevice.state={power:false,mode:'cool',temperature:24,fan:'high',swing:'off'};
+assert.deepEqual(controlledStateFields(scopedDevice),['mode','temperature','fan','swing']);
+const noPower={id:'no-power',controlled_fields:controlledStateFields(scopedDevice),settings:projectState(scopedDevice.state,controlledStateFields(scopedDevice))};assert.ok(!Object.hasOwn(noPower.settings,'power'));scopedDevice.savedStates=[noPower];assert.equal(findSavedState(scopedDevice)?.id,'no-power');scopedDevice.state.power=true;assert.equal(findSavedState(scopedDevice)?.id,'no-power');
+scopedDevice.rows[0].cells.push({type:'button',action:'temp_up',sendMode:'independent'},...['mode','fan','swing'].map(group=>({type:'group',group,sendMode:'independent'})));assert.deepEqual(controlledStateFields(scopedDevice),[]);assert.equal(findSavedState(scopedDevice),undefined);
+console.log('Scoped climate captures exclude independent folders, preserve eight signals and legacy semantics, and match only an unambiguous active scope.');

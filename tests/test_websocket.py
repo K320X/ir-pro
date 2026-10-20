@@ -117,6 +117,14 @@ class WebSocketTests(unittest.IsolatedAsyncioTestCase):
         self.manager.async_send_state.assert_not_awaited()
         self.manager.async_learn.assert_not_awaited()
 
+    async def test_full_state_send_forwards_optional_capture_scope(self):
+        connection = self.connection(admin=True)
+        fields = ["power", "mode", "temperature", "fan"]
+        await self.websocket.ws_send_state(self.hass, connection, {
+            "id": 15, "device_id": "device", "state": {"power": True}, "controlled_fields": fields,
+        })
+        self.manager.async_send_state.assert_awaited_once_with("device", {"power": True}, controlled_fields=fields)
+
     async def test_authenticated_subscription_only_reads_and_can_unsubscribe(self):
         connection = self.connection()
         await self.websocket.ws_subscribe(self.hass, connection, {"id": 13})

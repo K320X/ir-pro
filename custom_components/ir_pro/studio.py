@@ -11,6 +11,7 @@ from .errors import IRProError
 MODES = {"cool", "heat", "dry", "fan", "auto"}
 FANS = {"auto", "low", "medium", "high", "speed_4", "speed_5"}
 SWINGS = {"off", "auto", *(f"position_{n}" for n in range(1, 7))}
+CONTROLLED_FIELDS = ("power", "mode", "temperature", "fan", "swing")
 STUDIO_ICONS = {
     "remote", "power-off", "plus", "minus", "droplet", "swing", "folder",
     "light", "auto", "home", "copy", "radio", "display", "tv", "lightbulb",
@@ -52,14 +53,56 @@ def _boolean(value: Any, label: str) -> bool:
 
 
 def validate_state_effect(value: Any) -> dict:
-    """An independent command may declare exactly one absolute setting."""
+    """An independent command declares one absolute or relative change."""
     if not isinstance(value, dict) or len(value) != 1:
         _fail("La acción independiente debe cambiar un único ajuste.")
     field, setting = next(iter(value.items()))
     allowed = {"mode": MODES, "fan": FANS, "swing": SWINGS}
+    if field == "power" and type(setting) is bool:
+        return {field: setting}
+    if field == "temperature_delta" and type(setting) is int and setting in (-1, 1):
+        return {field: setting}
+    if field == "swing_toggle" and setting is True:
+        return {field: True}
     if not isinstance(field, str) or field not in allowed or not isinstance(setting, str) or setting not in allowed[field]:
         _fail("El ajuste de la acción independiente no es válido.")
     return {field: setting}
+
+
+def state_effect_identity(effect: dict) -> str:
+    if "power" in effect:
+        return "power_on" if effect["power"] else "power_off"
+    if "temperature_delta" in effect:
+        return "temp_up" if effect["temperature_delta"] > 0 else "temp_down"
+    if "swing_toggle" in effect:
+        return "swing"
+    return next(iter(effect.values()))
+
+
+def apply_state_effect(state: dict, effect: dict) -> dict:
+    if "temperature_delta" in effect:
+        return {"temperature": min(30, max(18, state["temperature"] + effect["temperature_delta"]))}
+    if "swing_toggle" in effect:
+        return {"swing": "off" if state["swing"] == "auto" else "auto"}
+    return dict(effect)
+
+
+def independent_action_owner(studio: dict, function_key: str) -> tuple[dict, dict] | None:
+    def visit(node: dict):
+        for child in node.get("independentActions", []):
+            if child["id"] == function_key:
+                return node, child
+        if node.get("type") == "group" and node.get("group") == "custom":
+            for child in node.get("children", []):
+                if isinstance(child, dict) and (owner := visit(child)):
+                    return owner
+        return None
+
+    for row in studio.get("rows", []):
+        for node in row.get("cells", []):
+            if node and (owner := visit(node)):
+                return owner
+    return None
 
 
 def validate_configuration(value: Any, *, full: bool = False) -> dict:
@@ -88,6 +131,81 @@ def configuration_key(value: dict) -> tuple:
         return (False,)
     return (True, state["mode"], None if state["mode"] in {"dry", "fan"} else state["temperature"],
             state["fan"], state["swing"])
+
+
+def validate_controlled_fields(value: Any) -> list[str]:
+    """Field order is part of the public capture contract."""
+    if not isinstance(value, list) or not value or any(not isinstance(field, str) for field in value):
+        _fail("Los ajustes incluidos en el estado no son válidos.")
+    if value != [field for field in CONTROLLED_FIELDS if field in value]:
+        _fail("Los ajustes incluidos en el estado no son válidos.")
+    return list(value)
+
+
+def active_controlled_fields(studio: dict, power: bool) -> list[str]:
+    """Independent visible controls exclude fields, without changing siblings."""
+    independent = set()
+    action_fields = {"power_on": "power", "power_off": "power", "temp_up": "temperature", "temp_down": "temperature",
+                     "set_mode": "mode", "set_fan": "fan", "set_swing": "swing", "swing": "swing"}
+
+    def visit(node: dict) -> None:
+        kind = node.get("type")
+        if node.get("sendMode") == "independent":
+            if kind == "group" and node.get("group") in {"mode", "fan", "swing"}:
+                independent.add(node["group"])
+            elif kind in {"button", "dual"}:
+                actions = node.get("actions", []) if kind == "dual" else [node]
+                independent.update(action_fields[side["action"]] for side in actions if side.get("action") in action_fields)
+        if kind == "group" and node.get("group") == "custom":
+            for child in node.get("children", []):
+                if isinstance(child, dict):
+                    visit(child)
+
+    for row in studio.get("rows", []):
+        for node in row.get("cells", []):
+            if node:
+                visit(node)
+    fields = [field for field in CONTROLLED_FIELDS if field not in independent]
+    return ["power"] if "power" in fields and not power else fields
+
+
+def project_configuration(value: Any, fields: list[str]) -> dict:
+    """Discard independent settings; do not validate or store their values."""
+    fields = validate_controlled_fields(fields)
+    if not isinstance(value, dict) or "power" in fields and type(value.get("power")) is not bool:
+        _fail("El estado del mando no es válido.")
+    if "power" in fields and not value["power"]:
+        if fields != ["power"]:
+            _fail("El estado de apagado solo incluye el encendido.")
+        return {"power": False}
+    state = {}
+    for field in fields:
+        setting = value.get(field)
+        if field == "power":
+            state[field] = setting
+        elif field == "temperature":
+            state[field] = _integer(setting, 18, 30, "La temperatura")
+        else:
+            allowed = {"mode": MODES, "fan": FANS, "swing": SWINGS}[field]
+            if not isinstance(setting, str) or setting not in allowed:
+                _fail("Un ajuste incluido en el estado no es válido.")
+            state[field] = setting
+    return state
+
+
+def record_fields(record: dict) -> list[str]:
+    if "controlled_fields" in record:
+        return validate_controlled_fields(record["controlled_fields"])
+    return list(CONTROLLED_FIELDS) if record["settings"]["power"] else ["power"]
+
+
+def scoped_configuration_key(value: dict, fields: list[str]) -> tuple:
+    state = project_configuration(value, fields)
+    return (tuple(fields), *(None if field == "temperature" and "mode" in fields and state.get("mode") in {"dry", "fan"} else state[field] for field in fields))
+
+
+def record_configuration_key(record: dict) -> tuple:
+    return scoped_configuration_key(record["settings"], record_fields(record))
 
 
 def _bounded_json(value: Any) -> None:
@@ -156,7 +274,7 @@ def sync_studio(studio: dict, functions: list[dict]) -> None:
         apply(record, saved=True)
 
 
-def validate_studio(value: Any, functions: list[dict], icons: set[str], current: dict | None = None) -> dict:
+def validate_studio(value: Any, functions: list[dict], icons: set[str], current: dict | None = None, *, loading: bool = False) -> dict:
     """Keep the reviewed visual editor without changing existing real identities."""
     _bounded_json(value)
     if not isinstance(value, dict) or value.get("type") not in ("simple", "stateful"):
@@ -219,6 +337,11 @@ def validate_studio(value: Any, functions: list[dict], icons: set[str], current:
         previous = previous_nodes.get(result["id"], {})
         if result["type"] not in ("button", "dual", "group"):
             _fail("El tipo de función del editor no es válido.")
+        send_mode = raw.get("sendMode", previous.get("sendMode", "settings"))
+        if send_mode not in ("settings", "independent") or (studio["type"] == "simple" and send_mode != "settings"):
+            _fail("El tipo de envío de la función no es válido.")
+        if result["type"] == "group" or "sendMode" in raw or "sendMode" in previous:
+            result["sendMode"] = send_mode
         if result["type"] == "dual":
             actions = raw.get("actions")
             if not isinstance(actions, list) or len(actions) != 2:
@@ -231,10 +354,6 @@ def validate_studio(value: Any, functions: list[dict], icons: set[str], current:
                 _fail("El contenido de la carpeta no es válido.")
             result["group"] = kind
             result["action"] = "open_group"
-            send_mode = raw.get("sendMode", previous.get("sendMode", "settings"))
-            if send_mode not in ("settings", "independent") or (studio["type"] == "simple" and send_mode != "settings"):
-                _fail("El tipo de envío de la carpeta no es válido.")
-            result["sendMode"] = send_mode
             if kind == "custom":
                 children = raw.get("children", [])
                 if not isinstance(children, list) or len(children) > 100:
@@ -264,14 +383,19 @@ def validate_studio(value: Any, functions: list[dict], icons: set[str], current:
             if studio["type"] != "stateful" or result["type"] != "button" or result["action"] != "learned":
                 _fail("Una acción independiente debe ser un botón aprendido de un mando con estados.")
             result["state_effect"] = deepcopy(effect)
-        if independent and (effect is None or result["type"] != "button" or result["action"] != "learned" or result["value"] != next(iter(effect.values()))):
+        if independent and (effect is None or result["type"] != "button" or result["action"] != "learned" or result["value"] != state_effect_identity(effect)):
             _fail("La opción independiente no coincide con el ajuste de su señal.")
+        if independent and ("action_index" in raw or "action_index" in previous):
+            action_index = _integer(raw.get("action_index", previous.get("action_index")), 0, 1, "La acción del botón")
+            if "action_index" in previous and action_index != previous["action_index"]:
+                _fail("La identidad de una acción existente se conserva.")
+            result["action_index"] = action_index
         retained = raw.get("independentActions", previous.get("independentActions", []))
         if not isinstance(retained, list) or len(retained) > 100 or (retained and (studio["type"] != "stateful" or independent)):
             _fail("Las acciones independientes de la carpeta no son válidas.")
         if retained or "independentActions" in raw or "independentActions" in previous:
             result["independentActions"] = [node(child, depth + 1, independent=True) for child in retained]
-            effects = [tuple(child["state_effect"].items()) for child in result["independentActions"]]
+            effects = [(child.get("action_index"), tuple(child["state_effect"].items())) for child in result["independentActions"]]
             if len(effects) != len(set(effects)):
                 _fail("Hay opciones independientes repetidas en esta carpeta.")
         return result
@@ -313,10 +437,19 @@ def validate_studio(value: Any, functions: list[dict], icons: set[str], current:
             _fail("El estado guardado no corresponde a una entidad button de este mando.")
         if "state_effect" in function:
             _fail("Una acción independiente no puede representar un estado completo.")
-        settings = validate_configuration(raw.get("settings"))
-        if identity_value in previous and configuration_key(previous[identity_value]["settings"]) != configuration_key(settings):
-            _fail("Los ajustes de un estado guardado se conservan. Crea otro estado para cambiarlos.")
+        old = previous.get(identity_value)
+        has_fields = "controlled_fields" in raw or old is not None and "controlled_fields" in old
+        fields = validate_controlled_fields(raw.get("controlled_fields", old.get("controlled_fields") if old else None)) if has_fields else None
+        if old is not None and ("controlled_fields" in old) != has_fields:
+            _fail("Los ajustes incluidos en una captura existente se conservan. Crea otro estado para cambiarlos.")
+        settings = project_configuration(raw.get("settings"), fields) if has_fields else validate_configuration(raw.get("settings"))
         record = {"id": identity_value, "name": function["name"], "settings": settings}
+        if has_fields:
+            record["controlled_fields"] = fields
+        if old is not None and record_configuration_key(old) != record_configuration_key(record):
+            _fail("Los ajustes de un estado guardado se conservan. Crea otro estado para cambiarlos.")
+        if old is None and not loading and record_fields(record) != active_controlled_fields(studio, settings.get("power", studio["state"]["power"])):
+            _fail("La captura debe incluir únicamente los ajustes combinados actuales del mando. Recarga el panel antes de grabar el estado.")
         for stamp in ("createdAt", "updatedAt"):
             if stamp in raw:
                 record[stamp] = _text(raw[stamp], "La fecha del estado", 64)

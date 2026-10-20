@@ -1,10 +1,65 @@
 // The server owns entities and learned signal references. Studio rows are UI metadata.
 const clone=value=>structuredClone(value);
+export const STATE_FIELDS=['power','mode','temperature','fan','swing'];
+export function linkedActionEffect(action) {
+  if(action?.action==='power_on'||action?.action==='power_off')return {power:action.action==='power_on'};
+  if(action?.action==='temp_up'||action?.action==='temp_down')return {temperature_delta:action.action==='temp_up'?1:-1};
+  if(action?.action==='swing')return {swing_toggle:true};
+  const field={set_mode:'mode',set_fan:'fan',set_swing:'swing'}[action?.action];
+  return field?independentStateEffect({state_effect:{[field]:action.value}}):null;
+}
+export function actionStateField(action) {
+  const key=Object.keys(linkedActionEffect(action)||{})[0];
+  return key==='temperature_delta'?'temperature':key==='swing_toggle'?'swing':key;
+}
+export function controlledStateFields(device,state=device.state) {
+  const independent=new Set();
+  const visit=node=>{
+    if(!node)return;
+    if(node.sendMode==='independent'){
+      if(node.type==='group'&&['mode','fan','swing'].includes(node.group))independent.add(node.group);
+      else if(node._existingType!=='switch')for(const action of node.type==='dual'?node.actions||[]:[node]){const field=actionStateField(action);if(field)independent.add(field);}
+    }
+    if(node.type==='group'&&node.group==='custom')(node.children||[]).forEach(visit);
+  };
+  for(const row of device.rows||[])if(row.type==='buttons')(row.cells||[]).forEach(visit);
+  if(!state?.power&&!independent.has('power'))return ['power'];
+  return STATE_FIELDS.filter(field=>!independent.has(field));
+}
+export function recordStateFields(record) {
+  if(!Object.hasOwn(record,'controlled_fields'))return record?.settings?.power===false?['power']:[...STATE_FIELDS];
+  const fields=record.controlled_fields;
+  if(!Array.isArray(fields)||!fields.length||new Set(fields).size!==fields.length||fields.some(field=>!STATE_FIELDS.includes(field)))return null;
+  return STATE_FIELDS.filter(field=>fields.includes(field));
+}
+export function projectState(state,fields=STATE_FIELDS) {
+  if(fields.includes('power')&&state.power===false)return {power:false};
+  return Object.fromEntries(fields.map(field=>[field,field==='swing'?(state.swing===true?'auto':state.swing===false?'off':state.swing):state[field]]));
+}
+export function scopedStateKey(state,fields) {
+  if(fields.includes('power')&&state.power===false)return '[false]';
+  const settings=projectState(state,fields);
+  return JSON.stringify(fields.map(field=>[field,field==='temperature'&&fields.includes('mode')&&['dry','fan'].includes(settings.mode)?null:settings[field]]));
+}
+export function stateRecordMatches(record,state,fields) {
+  const stored=recordStateFields(record);
+  return !!stored&&JSON.stringify(stored)===JSON.stringify(fields)&&scopedStateKey(record.settings,stored)===scopedStateKey(state,fields);
+}
+export function findSavedState(device,state=device.state,fields=controlledStateFields(device,state)) {
+  if(!fields.length)return undefined;
+  const matches=(device.savedStates||[]).filter(record=>stateRecordMatches(record,state,fields));
+  const explicit=matches.filter(record=>Object.hasOwn(record,'controlled_fields'));
+  const candidates=explicit.length?explicit:matches;
+  return candidates.length===1?candidates[0]:undefined;
+}
 // Independent actions describe one confirmed change, never a complete state.
 export function independentStateEffect(node) {
   const effect=node?.state_effect;
   if(!effect||typeof effect!=='object'||Array.isArray(effect)||Object.keys(effect).length!==1)return null;
   const [key]=Object.keys(effect),value=effect[key];
+  if(key==='power')return typeof value==='boolean'?{power:value}:null;
+  if(key==='temperature_delta')return Number.isInteger(value)&&Math.abs(value)===1?{temperature_delta:value}:null;
+  if(key==='swing_toggle')return value===true?{swing_toggle:true}:null;
   const allowed={mode:['cool','heat','dry','fan','auto'],fan:['auto','low','medium','high','speed_4','speed_5'],swing:['off','auto',...Array.from({length:6},(_,index)=>'position_'+(index+1))]};
   return Object.hasOwn(allowed,key)&&allowed[key].includes(value)?{[key]:value}:null;
 }

@@ -104,6 +104,7 @@ def validate_model(
     source_ids: set[str],
     signal_records: dict[str, dict],
     entity_ids: set[str],
+    *, loading: bool = False,
 ) -> tuple[dict, list[str]]:
     """Return a sanitized independent model and notices, or reject atomically."""
     if not isinstance(candidate, dict) or candidate.get("version") != 2:
@@ -221,7 +222,7 @@ def validate_model(
             device["layout"] = _layout(raw_device.get("layout"), [f["key"] for f in device["functions"]], device_id)
             previous_studio = old_devices.get(device_id, (None, {}))[1].get("studio")
             if "studio" in raw_device:
-                device["studio"] = validate_studio(raw_device["studio"], device["functions"], ICONS, previous_studio)
+                device["studio"] = validate_studio(raw_device["studio"], device["functions"], ICONS, previous_studio, loading=loading)
             elif previous_studio is not None:
                 # Older clients must not silently erase the visual editor.
                 device["studio"] = validate_studio(previous_studio, device["functions"], ICONS, previous_studio)

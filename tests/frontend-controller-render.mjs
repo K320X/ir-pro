@@ -3,7 +3,7 @@ import {readFileSync} from 'node:fs';
 import vm from 'node:vm';
 import {randomUUID} from 'node:crypto';
 import {styles} from '../custom_components/ir_pro/frontend/ir-pro-theme.js';
-import {exportModel,importModel} from '../custom_components/ir_pro/frontend/ir-pro-model.js';
+import {exportModel,importModel,STATE_FIELDS,controlledStateFields,recordStateFields,projectState,stateRecordMatches,findSavedState} from '../custom_components/ir_pro/frontend/ir-pro-model.js';
 import {icon as renderIcon} from '../custom_components/ir_pro/frontend/ir-pro-icons.js';
 
 // Execute the actual controller render functions. This catches reentrant routing
@@ -37,6 +37,8 @@ vm.runInContext('render();',context);assert.equal(warningCount,1);
 const remote={id:'existing',name:'Split salón',type:'simple',icon:'remote',rows:[]};
 context.model={emitters:[{id:'emitter',name:'IR salón',model:'RM4 mini',devices:[remote]}],selected:remote.id};context.view='remote';
 vm.runInContext('render();render();',context);assert.equal(warningCount,1);assert.match(html,/Split salón/);
+assert.match(html,/class="remote-navigation"[\s\S]*data-home>[\s\S]*Emisores<\/button><span class="muted remote-emitter">IR salón<\/span>/);
+assert.ok(!html.includes('<h1>Split salón</h1><p class="muted">IR salón</p>'));
 assert.match(source,/hassChanged\(\)\{refreshAmbientReadings\(\);\}/,'HA state updates must only patch ambient values, preserving the existing view and alerts');
 
 context.saveFailed=false;vm.runInContext('render();',context);assert.equal(warningCount,0);
@@ -80,7 +82,7 @@ assert.equal(vm.runInContext("displayAccent('#f4f6f8')",context),'#f4f6f8');
 assert.equal(vm.runInContext("displayAccent('#c6b5ff')",context),'#c6b5ff');
 assert.match(source,/draft\.accent=displayAccent\(draft\.accent\)/,'Editing must show the same resolved color in its picker and preview');
 
-const captureContext={viewedSavedStateId:null,savedStateFor:()=>null,configurationKey:JSON.stringify,configurationLabel:()=> 'Apagado',esc:String,glyph:()=>'',stateTable:()=>'',d:{state:{power:false},savedStates:[]}};
+const captureContext={controlledStateFields,recordStateFields,stateRecordMatches,viewedSavedStateId:null,savedStateFor:()=>null,configurationKey:JSON.stringify,configurationLabel:()=> 'Apagado',esc:String,glyph:()=>'',stateTable:()=>'',d:{state:{power:false},savedStates:[]}};
 vm.createContext(captureContext);vm.runInContext(extract('stateCapturePanel'),captureContext);
 const captureHTML=vm.runInContext('stateCapturePanel(d)',captureContext);
 assert.match(captureHTML,/data-learn-state>Aprender estado<\/button>/);
@@ -98,7 +100,7 @@ bulkDevice.studio.rows[2].cells[1].sendMode='independent';bulkDevice.studio.rows
 for(const key of [savedId,independentId])bulkDevice.layout.rows.push({id:'layout-'+key,columns:1,height:2,cells:[key]});
 const deletedWire=structuredClone(bulkWire);deletedWire.emitters[0].devices[0].studio.savedStates=[];deletedWire.emitters[0].devices[0].functions=deletedWire.emitters[0].devices[0].functions.filter(fn=>fn.key!==savedId);deletedWire.emitters[0].devices[0].layout.rows=deletedWire.emitters[0].devices[0].layout.rows.filter(row=>!row.cells.includes(savedId));
 let bulkDialog,bulkError='',bulkClosed=0,bulkRenders=0,bulkCalls=[],queuedRequest;
-const bulkContext={isAdmin:true,saveFailed:false,signalBusy:false,independentSending:false,disposed:false,revision:10,catalog:[],confirmedWire:structuredClone(bulkWire),model:importModel(bulkWire,bulkDevice.id),viewedSavedStateId:savedId,importModel,copy:structuredClone,validateDevice:()=>true,esc:String,glyph:()=>'',configurationLabel:()=> 'Apagado',configurationKey:JSON.stringify,showModal(title,body,buttons){bulkDialog={title,body,buttons};},queueRequest:action=>new Promise((resolve,reject)=>{queuedRequest=async()=>{try{resolve(await action());}catch(error){reject(error);}};}),api:{call:async(action,data)=>{bulkCalls.push([action,data]);return {revision:12,model:deletedWire,catalog:[{id:'updated'}]};}},closeModal(){bulkClosed++;},render(){bulkRenders++;},toast(){},formError(message){bulkError=message;}};
+const bulkContext={recordStateFields,isAdmin:true,saveFailed:false,signalBusy:false,independentSending:false,disposed:false,revision:10,catalog:[],confirmedWire:structuredClone(bulkWire),model:importModel(bulkWire,bulkDevice.id),viewedSavedStateId:savedId,importModel,copy:structuredClone,validateDevice:()=>true,esc:String,glyph:()=>'',configurationLabel:()=> 'Apagado',configurationKey:JSON.stringify,showModal(title,body,buttons){bulkDialog={title,body,buttons};},queueRequest:action=>new Promise((resolve,reject)=>{queuedRequest=async()=>{try{resolve(await action());}catch(error){reject(error);}};}),api:{call:async(action,data)=>{bulkCalls.push([action,data]);return {revision:12,model:deletedWire,catalog:[{id:'updated'}]};}},closeModal(){bulkClosed++;},render(){bulkRenders++;},toast(){},formError(message){bulkError=message;}};
 vm.createContext(bulkContext);vm.runInContext(extract('deleteAllSavedStates')+'\n'+extract('stateTable'),bulkContext);bulkContext.d=bulkContext.model.emitters[0].devices[0];
 const bulkBefore=JSON.stringify(bulkContext.model);
 vm.runInContext('deleteAllSavedStates(d)',bulkContext);
@@ -127,11 +129,44 @@ for(const response of [new Error('La configuración ha cambiado. Recarga el pane
 // Unknown combinations prepare the UI without a request. An unexpected backend
 // invalid_signal for an apparently learned state must remain a real inline error.
 let sends=0,learned=false,sendFailure=null;
-const sendContext={d:{id:'remote',state:fresh.state},configurationCopy:state=>({...state}),render(){},toast(){},clearActionError(){},savedStateFor:()=>learned?{signal:{kind:'learned',id:'real'}}:null,persist:async after=>{try{return await after();}catch(error){sendFailure=error;return false;}},api:{call:async()=>{sends++;throw {code:'invalid_signal',message:'Referencia perdida'};}}};
+const sendContext={independentSending:false,emitterFor:()=>({sourceId:'source'}),copy:structuredClone,controlledStateFields,d:{id:'remote',state:fresh.state},configurationCopy:state=>({...state}),render(){},toast(){},clearActionError(){},savedStateFor:()=>learned?{signal:{kind:'learned',id:'real'}}:null,persist:async after=>{try{return await after();}catch(error){sendFailure=error;return false;}},api:{call:async()=>{sends++;throw {code:'invalid_signal',message:'Referencia perdida'};}}};
 vm.createContext(sendContext);vm.runInContext(extract('commitState'),sendContext);
 assert.equal(await vm.runInContext("commitState(d,'Preparado',true)",sendContext),false);assert.equal(sends,0);
 learned=true;assert.equal(await vm.runInContext("commitState(d,'Enviar',true)",sendContext),false);assert.equal(sends,1);assert.equal(sendFailure.code,'invalid_signal');
 console.log('Frontend rendering, quiet accessible feedback, state remote defaults, canonical entities and unlearned-send guards passed.');
+
+// Run the real capture dialog and save callback with eight already learned,
+// independent swing options. Its name, entity and settings never include swing.
+const scopedRemote=structuredClone(fresh);scopedRemote.savedStates=[];scopedRemote.state={power:true,mode:'cool',temperature:24,fan:'high',swing:'position_4'};
+const scopedSwing=scopedRemote.rows[2].cells[1];scopedSwing.sendMode='independent';
+scopedSwing.independentActions=Array.from({length:8},(_,index)=>({id:'independent-'+index,name:'Posición '+index,type:'button',action:'learned',value:index<6?'position_'+(index+1):index===6?'auto':'off',state_effect:{swing:index<6?'position_'+(index+1):index===6?'auto':'off'},signals:{press:true},signal_refs:{press:'reference-'+index},entity:'button.swing_'+index}));
+const savedIndependent=JSON.stringify(scopedSwing.independentActions),elements=new Map();
+const element=()=>({value:'',textContent:'',innerHTML:'',hidden:false,disabled:false,classList:{add(){},remove(){}},addEventListener(){}});
+for(const id of ['state-record-name','state-record-entity','state-learn-status','retry-state-capture','test-state-capture'])elements.set('#'+id,element());
+let captureDialog,captureCalls=[],captureSaves=0,captureSnapshot;
+const scopedContext={d:scopedRemote,controlledStateFields,recordStateFields,projectState,stateRecordMatches,findSavedState,isAdmin:true,saveFailed:false,signalBusy:false,disposed:false,operation:0,viewedSavedStateId:null,saveQueue:Promise.resolve(),modalFoot:{lastElementChild:{disabled:false}},modalAbort:{signal:new AbortController().signal},uid:randomUUID,copy:structuredClone,esc:String,glyph:()=>'',clamp:(value,min,max,fallback)=>Number.isFinite(Number(value))?Math.min(max,Math.max(min,Math.round(Number(value)))):fallback,emitterFor:()=>({name:'IR salón',sourceId:'source'}),allEntityRecords:()=>[],field:(label,input)=>'<label>'+label+input+'</label>',$:selector=>elements.get(selector),showModal(title,body,buttons,setup){captureDialog={title,body,buttons};elements.get('#state-record-name').value=body.match(/id="state-record-name"[^>]*value="([^"]*)"/)[1];setup?.();},queueRequest:action=>action(),api:{call:async(action,data)=>{captureCalls.push([action,data]);return {signal_ref:'captured-climate',captured:true};}},persist:async()=>{captureSaves++;captureSnapshot=structuredClone(scopedRemote);return true;},closeModal(){},render(){},toast(){},formError(message){throw new Error(message);},flushDeferredEnvelope(){}};
+vm.createContext(scopedContext);
+vm.runInContext(source.slice(source.indexOf('  const modes ='),source.indexOf('  const symbols ='))+'\n'+source.split('\n').find(line=>line.trimStart().startsWith('const entitySlug ='))+'\n'+source.split('\n').find(line=>line.trimStart().startsWith('const savedStateFor ='))+'\n'+['configurationLabel','stateCapturePanel','stateTable','proposedStateEntity','learnState','viewSavedState'].map(extract).join('\n'),scopedContext);
+assert.equal(scopedRemote.savedStates.length,0);const beforeCapture=vm.runInContext('stateCapturePanel(d)',scopedContext);assert.ok(!beforeCapture.includes('Oscilación'));assert.ok(!beforeCapture.includes('state-table'));
+vm.runInContext('learnState(d)',scopedContext);await new Promise(resolve=>setImmediate(resolve));
+assert.match(captureDialog.body,/Encendido · Frío · 24 °C · Ventilador 3/);assert.ok(!captureDialog.body.includes('Oscilación'));assert.ok(!captureDialog.body.includes('oscilacion'));
+assert.match(captureDialog.body,/button\.ir_salon_aire_nuevo_encendido_frio_24_c_ventilador_3/);
+await captureDialog.buttons.at(-1).run();assert.equal(captureSaves,1);assert.equal(captureCalls.length,1);assert.equal(captureCalls[0][0],'learn');assert.equal(scopedRemote.savedStates.length,1);
+const climate=scopedRemote.savedStates[0];assert.deepEqual(Array.from(climate.controlled_fields),['power','mode','temperature','fan']);assert.deepEqual(climate.settings,{power:true,mode:'cool',temperature:24,fan:'high'});assert.equal(JSON.stringify(scopedSwing.independentActions),savedIndependent);
+scopedRemote.state.swing='position_6';assert.equal(findSavedState(scopedRemote)?.id,climate.id);scopedRemote.state.temperature=29;
+vm.runInContext('viewSavedState(d,d.savedStates[0].id)',scopedContext);assert.equal(scopedRemote.state.temperature,24);assert.equal(scopedRemote.state.swing,'position_6');
+const legacy={id:'legacy-wide',name:'Mi estado antiguo',entity:'button.original',settings:{power:true,mode:'heat',temperature:25,fan:'low',swing:'position_2'},signal:{kind:'learned',id:'old-reference'}};scopedRemote.savedStates.push(legacy);const legacyBefore=JSON.stringify(legacy);
+vm.runInContext('viewSavedState(d,"legacy-wide")',scopedContext);assert.equal(scopedRemote.state.swing,'position_2');assert.match(vm.runInContext('stateCapturePanel(d)',scopedContext),/data-relearn-state="legacy-wide"/);assert.equal(findSavedState(scopedRemote),undefined);assert.equal(JSON.stringify(legacy),legacyBefore);assert.ok(!Object.hasOwn(legacy,'controlled_fields'));
+assert.equal(captureSnapshot.savedStates[0].entity,climate.entity);
+scopedRemote.state={power:true,mode:'cool',temperature:24,fan:'high',swing:'position_6'};scopedContext.independentSending=false;scopedContext.model={version:1,selected:scopedRemote.id,emitters:[{id:'scope-emitter',sourceId:'source',name:'IR salón',devices:[scopedRemote]}]};scopedContext.importModel=importModel;scopedContext.validateDevice=()=>true;scopedContext.configurationCopy=state=>projectState(state,STATE_FIELDS);scopedContext.clearActionError=()=>{};scopedContext.persist=async after=>after();scopedContext.api.call=async(action,data)=>{captureCalls.push([action,data]);return {revision:20,model:exportModel(scopedContext.model)};};
+scopedContext.catalog=[];scopedContext.revision=0;scopedContext.confirmedWire={};vm.runInContext(extract('adoptCommandEnvelope')+'\n'+extract('commitState'),scopedContext);assert.equal(await vm.runInContext('commitState(d,"Enviar",true)',scopedContext),true);
+assert.equal(captureCalls.at(-1)[0],'send_state');assert.deepEqual(Array.from(captureCalls.at(-1)[1].controlled_fields),['power','mode','temperature','fan']);assert.equal(captureCalls.at(-1)[1].state.swing,'position_6');assert.equal(scopedRemote.state.swing,'position_6');
+console.log('Real scoped capture flow excludes swing from summary/name/entity/settings, preserves eight signals and manages legacy recordings without reinterpretation.');
+const noPowerRemote=structuredClone(fresh);noPowerRemote.state={power:false,mode:'cool',temperature:24,fan:'high',swing:'off'};noPowerRemote.savedStates=[];noPowerRemote.rows[1].cells[1].sendMode='independent';scopedContext.d=noPowerRemote;scopedContext.viewedSavedStateId=null;scopedContext.signalBusy=false;
+scopedContext.showModal=(title,body,buttons)=>{captureDialog={title,body,buttons};};
+vm.runInContext('learnState(d)',scopedContext);assert.ok(!/(Encender|Apagar|Encendido|Apagado)/.test(captureDialog.body));assert.match(captureDialog.body,/Frío · 24 °C · Ventilador 3/);
+for(const row of noPowerRemote.rows)for(const node of row.cells||[])if(node){if(node.type==='group'&&node.group!=='custom')node.sendMode='independent';if(['temp_up','temp_down'].includes(node.action))node.sendMode='independent';}
+assert.deepEqual(controlledStateFields(noPowerRemote),[]);const noAggregateHTML=vm.runInContext('stateCapturePanel(d)',scopedContext);assert.ok(!noAggregateHTML.includes('data-learn-state'));assert.match(noAggregateHTML,/Todos los ajustes se controlan por separado/);const previousDialog=captureDialog;vm.runInContext('learnState(d)',scopedContext);assert.equal(captureDialog,previousDialog);
 
 // Official state folders render the current state without rewriting their name,
 // chosen color, configured icon, state identity or learned references.
@@ -168,6 +203,9 @@ stateFolder.group='custom';stateFolder.name='Ventilador';assert.equal(symbol(),'
 stateFolder.group='fan';stateRemote.type='simple';assert.equal(symbol(),'settings');
 stateRemote.type='stateful';stateFolder.type='button';assert.equal(symbol(),'settings');
 assert.match(source,/symbol=buttonSymbol\(d,draft,visual\)/,'Editing preview uses the same state symbol as the remote');
+symbolContext.temperatureAvailable=()=>false;symbolContext.b={id:'temperature',type:'button',name:'Subir',action:'temp_up',icon:'plus',color:'#56c4ed',showName:true,sendMode:'independent'};symbolContext.editing=false;symbolContext.d.state.mode='fan';
+assert.ok(!vm.runInContext('buttonHTML(d,b,r,0)',symbolContext).includes(' disabled'));
+symbolContext.b.sendMode='settings';assert.ok(vm.runInContext('buttonHTML(d,b,r,0)',symbolContext).includes(' disabled'));
 
 // Position IDs and labels remain stable; only their pictograms reverse. One is
 // vertical/down and six is horizontal/up, with one active ray per fixed position.

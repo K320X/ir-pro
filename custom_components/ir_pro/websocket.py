@@ -96,10 +96,11 @@ async def ws_press(hass, connection, msg):
 @websocket_api.websocket_command({
     "type": "ir_pro/send_state", probatio.Required("device_id"): str,
     probatio.Required("state"): dict,
+    probatio.Optional("controlled_fields"): list,
 })
 @websocket_api.async_response
 async def ws_send_state(hass, connection, msg):
-    await _run(hass, connection, msg, lambda m: m.async_send_state(msg["device_id"], msg["state"]))
+    await _run(hass, connection, msg, lambda m: m.async_send_state(msg["device_id"], msg["state"], **({"controlled_fields": msg["controlled_fields"]} if "controlled_fields" in msg else {})))
 
 
 @websocket_api.websocket_command({

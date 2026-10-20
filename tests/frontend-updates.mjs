@@ -13,8 +13,10 @@ const extract=name=>{
 const focusCalls=[],headingAttributes=new Set(),dialogAttributes=new Set();let restored=0;
 const heading={tabIndex:0,setAttribute:key=>headingAttributes.add(key),focus:options=>focusCalls.push(options)};
 const dialog={querySelector:()=>heading,setAttribute:key=>dialogAttributes.add(key),showModal(){assert.ok(dialogAttributes.has('autofocus'));assert.ok(headingAttributes.has('autofocus'));assert.equal(heading.tabIndex,-1);}};
-const modalContext={captureScrollPosition:()=>()=>{restored++;}};vm.createContext(modalContext);vm.runInContext(extract('openNeutralDialog'),modalContext);modalContext.dialog=dialog;
+let locked=0,unlocked=0;
+const modalContext={modalScroll:{lock(){locked++;},unlock(){unlocked++;}},captureScrollPosition:()=>()=>{restored++;}};vm.createContext(modalContext);vm.runInContext(extract('openNeutralDialog'),modalContext);modalContext.dialog=dialog;
 vm.runInContext('openNeutralDialog(dialog)',modalContext);assert.equal(focusCalls.length,1);assert.equal(focusCalls[0].preventScroll,true);assert.equal(restored,1);
+assert.equal(locked,1);dialog.showModal=()=>{throw new Error('dialog failure');};assert.throws(()=>vm.runInContext('openNeutralDialog(dialog)',modalContext),/dialog failure/);assert.equal(unlocked,1);
 assert.ok(!source.includes('first.focus()'));assert.ok(!source.includes('entityModal.showModal();input.focus()'));
 
 // Ambient changes touch only their text slots and skip unchanged readings.

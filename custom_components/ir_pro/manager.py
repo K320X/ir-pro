@@ -17,7 +17,9 @@ from homeassistant.helpers.storage import Store
 from .const import DOMAIN, EMPTY_MODEL, LEARN_TIMEOUT, STORAGE_KEY, STORAGE_VERSION, VERSION
 from .errors import IRProError
 from .validation import signal_is_learned, validate_model
-from .studio import configuration_key, sync_studio, validate_configuration
+from .studio import (active_controlled_fields, apply_state_effect, independent_action_owner, record_configuration_key, record_fields,
+                     scoped_configuration_key, sync_studio, validate_configuration,
+                     validate_controlled_fields)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -144,7 +146,7 @@ class IRProManager:
         if not isinstance(incoming, dict) or type(stored.get("revision", 0)) is not int:
             raise IRProError("storage_error", "La configuración guardada de IR Pro no es válida.")
         known = {e["sourceId"] for e in incoming.get("emitters", []) if isinstance(e, dict) and isinstance(e.get("sourceId"), str)}
-        self.model, _ = validate_model(incoming, EMPTY_MODEL, known, records, set())
+        self.model, _ = validate_model(incoming, EMPTY_MODEL, known, records, set(), loading=True)
         self.signals = deepcopy(records)
         self.revision = max(0, int(stored.get("revision", 0)))
         # No device acknowledgement exists. A restart must never imply it is on.
@@ -380,16 +382,24 @@ class IRProManager:
             self._notify()
             return {"verified": True}
 
-    async def async_send_state(self, device_id: str, state: dict) -> dict:
+    async def async_send_state(self, device_id: str, state: dict, controlled_fields: list[str] | None = None) -> dict:
         """Only an explicitly learned exact configuration can be transmitted."""
-        normalized = validate_configuration(state)
+        if not isinstance(state, dict) or type(state.get("power")) is not bool:
+            raise IRProError("invalid_model", "El estado del mando no es válido.")
         _, device = self._find_device(device_id)
         studio = device.get("studio")
         if not studio or studio["type"] != "stateful":
             raise IRProError("invalid_model", "Este dispositivo no es un mando con estados.")
-        key = configuration_key(normalized)
-        matches = [item for item in studio["savedStates"] if configuration_key(item["settings"]) == key]
-        record = next((item for item in matches if self.function_available(item["id"])), matches[0] if matches else None)
+        fields = active_controlled_fields(studio, state["power"])
+        if controlled_fields is not None and validate_controlled_fields(controlled_fields) != fields:
+            raise IRProError("invalid_model", "Los ajustes combinados del mando han cambiado. Recarga antes de enviarlos.")
+        key = scoped_configuration_key(state, fields)
+        matches = [item for item in studio["savedStates"] if record_fields(item) == fields and record_configuration_key(item) == key]
+        explicit = [item for item in matches if "controlled_fields" in item]
+        matches = explicit or matches
+        if len(matches) > 1:
+            raise IRProError("ambiguous_state", "Hay varias capturas para estos ajustes. Conserva una sola antes de enviar el estado.")
+        record = matches[0] if matches else None
         if not record:
             raise IRProError("invalid_signal", "Este estado no tiene una señal aprendida. Aprende primero este estado del mando original.")
         result = await self.async_press(record["id"], _expected_state=key)
@@ -441,13 +451,15 @@ class IRProManager:
                 raise IRProError("invalid_signal", "La función ya no está disponible.")
             emitter, device, function = found
             state_record = next((item for item in device.get("studio", {}).get("savedStates", []) if item["id"] == function_key), None)
-            if _expected_state is not None and (not state_record or configuration_key(state_record["settings"]) != _expected_state):
+            if _expected_state is not None and (not state_record or record_configuration_key(state_record) != _expected_state or active_controlled_fields(device.get("studio", {}), state_record["settings"].get("power", device["studio"]["state"]["power"])) != list(_expected_state[0])):
                 raise IRProError("invalid_signal", "El estado guardado ha cambiado. Recarga el mando antes de enviarlo.")
             next_state = (not function.get("on")) if desired is None else desired
             signal = "press" if function["type"] == "button" else ("on" if next_state else "off")
             record = self._record(function["signal_refs"][signal])
             sent_settings = deepcopy(state_record["settings"]) if state_record else None
             sent_effect = deepcopy(function.get("state_effect"))
+            owner = independent_action_owner(device.get("studio", {}), function_key) if sent_effect else None
+            sent_owner = (owner[0]["id"], owner[1].get("action_index")) if owner and owner[0].get("type") == "dual" else None
             sent_device_id, sent_source_id = device["id"], emitter["sourceId"]
             await self._remote_call(emitter["sourceId"], "send_command", record)
             async with self._lock:
@@ -462,10 +474,13 @@ class IRProManager:
                                     if f["type"] == "switch":
                                         f["on"] = bool(next_state)
                                     if sent_effect and f.get("state_effect") == sent_effect and d["id"] == sent_device_id and e["sourceId"] == sent_source_id and d.get("studio", {}).get("type") == "stateful":
-                                        d["studio"]["state"].update(sent_effect)
+                                        d["studio"]["state"].update(apply_state_effect(d["studio"]["state"], sent_effect))
+                                        owner = independent_action_owner(d["studio"], function_key)
+                                        if owner and sent_owner == (owner[0]["id"], owner[1].get("action_index")) and owner[0].get("type") == "dual" and type(owner[1].get("action_index")) is int and owner[1]["action_index"] in (0, 1):
+                                            owner[0]["activeSide"] = 1 - owner[1]["action_index"]
                                         state_updated = True
                             current_record = next((item for item in d.get("studio", {}).get("savedStates", []) if item["id"] == function_key), None)
-                            if current_record and sent_settings is not None and d["id"] == sent_device_id and e["sourceId"] == sent_source_id and configuration_key(current_record["settings"]) == configuration_key(sent_settings):
+                            if current_record and sent_settings is not None and d["id"] == sent_device_id and e["sourceId"] == sent_source_id and record_configuration_key(current_record) == record_configuration_key(state_record):
                                 d["studio"]["state"].update(sent_settings)
                                 state_updated = True
                     revision = self.revision + 1 if state_updated else self.revision

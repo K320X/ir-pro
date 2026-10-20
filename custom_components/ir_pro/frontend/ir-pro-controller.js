@@ -1,6 +1,7 @@
-import {icon} from './ir-pro-icons.js?v=0.2.0b6';
-import {importModel,exportModel,reconcileCanonical,independentStateEffect} from './ir-pro-model.js?v=0.2.0b6';
-import {mountIconPickers} from './ir-pro-pickers.js?v=0.2.0b6';
+import {icon} from './ir-pro-icons.js?v=0.2.0b7';
+import {importModel,exportModel,reconcileCanonical,independentStateEffect,linkedActionEffect,actionStateField,controlledStateFields,recordStateFields,projectState,scopedStateKey,stateRecordMatches,findSavedState} from './ir-pro-model.js?v=0.2.0b7';
+import {mountIconPickers} from './ir-pro-pickers.js?v=0.2.0b7';
+import {createModalScrollLock} from './ir-pro-modal-scroll.js?v=0.2.0b7';
 export function mountStudio(root,api,initial,isAdmin,openMenu) {
   const scope=root.getRootNode(),lifecycle=new AbortController();
   let disposed=false,catalog=initial.catalog||[],revision=initial.revision||0,saveQueue=Promise.resolve(true),saveFailed=false,actionError='',signalBusy=false,independentSending=false,operation=0,pendingSaves=0,unsubscribe=null,lastAmbientSnapshot='',deferredEnvelope=null,scrollGeneration=0,inputGeneration=0,lastRenderedRoute='';
@@ -11,6 +12,7 @@ export function mountStudio(root,api,initial,isAdmin,openMenu) {
   const modalBody = scope.querySelector('#modal-body');
   const modalFoot = scope.querySelector('#modal-foot');
   const entityModal = scope.querySelector('#entity-modal');
+  const modalScroll = createModalScrollLock(root,lifecycle.signal);
   const $ = (query, scope = root.getRootNode()) => scope.querySelector(query);
   const $$ = (query, scope = root.getRootNode()) => Array.from(scope.querySelectorAll(query));
   const esc = value => String(value ?? '').replace(/[&<>"']/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
@@ -34,7 +36,7 @@ export function mountStudio(root,api,initial,isAdmin,openMenu) {
   const deviceIcons = [{value:'remote',name:'Mando'},{value:'wind',name:'Aire acondicionado'},{value:'tv',name:'Televisor'},{value:'fan',name:'Ventilador'},{value:'light',name:'Iluminación'}];
   symbols.push(...[{value:'chevron-up',name:'Flecha arriba'},{value:'chevron-down',name:'Flecha abajo'},{value:'timer',name:'Temporizador'},{value:'timer-off',name:'Cancelar temporizador'},{value:'volume-2',name:'Volumen'},{value:'move-vertical',name:'Movimiento vertical'},{value:'move-horizontal',name:'Movimiento horizontal'},{value:'droplets',name:'Humedad'},{value:'lightbulb',name:'Bombilla'},{value:'zap',name:'Potencia'},{value:'leaf',name:'Ahorro'}]);
   deviceIcons.push({value:'air-vent',name:'Aire acondicionado'});
-  const actionOptions = [{value:'learned',name:'Enviar una señal aprendida'},{value:'power_on',name:'Encender con los ajustes del mando'},{value:'power_off',name:'Apagar y conservar los ajustes'},{value:'temp_up',name:'Subir temperatura'},{value:'temp_down',name:'Bajar temperatura'},{value:'set_mode',name:'Seleccionar un modo'},{value:'set_fan',name:'Seleccionar una velocidad'},{value:'set_swing',name:'Seleccionar posición u oscilación'},{value:'swing',name:'Activar o desactivar oscilación'}];
+  const actionOptions = [{value:'learned',name:'Enviar una señal aprendida'},{value:'power_on',name:'Encender'},{value:'power_off',name:'Apagar'},{value:'temp_up',name:'Subir temperatura'},{value:'temp_down',name:'Bajar temperatura'},{value:'set_mode',name:'Seleccionar un modo'},{value:'set_fan',name:'Seleccionar una velocidad'},{value:'set_swing',name:'Seleccionar posición u oscilación'},{value:'swing',name:'Activar o desactivar oscilación'}];
   const actionValueChoices = action => action==='set_mode'?modes:action==='set_fan'?fans:action==='set_swing'?swingStates:null;
   const actionValueLabel = action => action==='set_mode'?'Modo':action==='set_fan'?'Velocidad':'Posición u oscilación';
   const defaultActionValue = action => action==='set_mode'?'cool':['set_fan','set_swing'].includes(action)?'auto':'';
@@ -45,25 +47,35 @@ export function mountStudio(root,api,initial,isAdmin,openMenu) {
     if(folder.group==='fan')return fanChoices(folder).map(choice=>({...choice,icon:choice.value==='auto'?'auto':'fan-speed-'+clamp(folder.fanSpeedCount,2,5,3)+'-'+fans.indexOf(choice)}));
     return folder.group==='swing'?swingChoices(folder):[];
   }
-  function independentActionFor(folder,value) {
-    return (folder.independentActions||[]).find(node=>node.value===value&&independentStateEffect(node)?.[folder.group]===value);
+  function independentChoices(control) {
+    if(control.type==='group')return officialGroupChoices(control).map(choice=>({...choice,state_effect:{[control.group]:choice.value}}));
+    if(control._existingType==='switch')return [];
+    return (control.type==='dual'?control.actions||[]:[control]).flatMap((action,index)=>{
+      const effect=linkedActionEffect(action);if(!effect)return [];
+      const intent=action.action==='power_on'?'Encender':action.action==='power_off'?'Apagar':actionOptions.find(item=>item.value===action.action)?.name||action.name;
+      return [{...action,name:['power_on','power_off'].includes(action.action)?intent:action.name,icon:action.action==='power_on'?'power':action.action==='power_off'?'power-off':action.icon,value:action.action.startsWith('set_')?action.value:action.action,action_index:index,state_effect:effect}];
+    });
+  }
+  function independentActionFor(control,value,index) {
+    const choice=independentChoices(control).find(item=>item.value===value&&(index===undefined||item.action_index===index));
+    return choice&&(control.independentActions||[]).find(node=>node.value===value&&JSON.stringify(independentStateEffect(node))===JSON.stringify(choice.state_effect)&&(control.type==='group'||node.action_index===(index??0)));
   }
   function ensureIndependentActions(folder) {
-    if(!['mode','fan','swing'].includes(folder.group)||folder.sendMode!=='independent')return;
+    if(folder.sendMode!=='independent')return;
     if(!Array.isArray(folder.independentActions))folder.independentActions=[];
-    for(const choice of officialGroupChoices(folder))if(!independentActionFor(folder,choice.value)){
+    for(const choice of independentChoices(folder))if(!independentActionFor(folder,choice.value,choice.action_index)){
       const symbol=symbols.some(item=>item.value===choice.icon)?choice.icon:folder.group==='swing'?'swing':folder.group==='fan'?'fan':'remote';
-      folder.independentActions.push({...button(choice.name,symbol,'learned',folder.color,choice.value),state_effect:{[folder.group]:choice.value}});
+      folder.independentActions.push({...button(choice.name,symbol,'learned',choice.color||folder.color,choice.value),...(choice.action_index===undefined?{}:{action_index:choice.action_index}),state_effect:copy(choice.state_effect)});
     }
   }
   const row = (cells, columns = cells.length || 1) => ({id:uid(),type:'buttons',height:2,columns,cells});
   const displayRow = () => ({id:uid(),type:'display',height:2,width:3,style:'modern',accent:'#f4f6f8',fields:{temperature:true,mode:true,fan:true,swing:true,power:true}});
   const configurationCopy = s => s.power?{power:true,mode:s.mode,temperature:s.temperature,fan:s.fan,swing:swingValue(s)}:{power:false};
   const configurationKey = s => JSON.stringify(s.power?[true,s.mode,['dry','fan'].includes(s.mode)?null:s.temperature,s.fan,swingValue(s)]:[false]);
-  const savedStateFor = (d,s=d.state) => (d.savedStates||[]).find(record=>configurationKey(record.settings)===configurationKey(s));
-  function configurationLabel(s) {
-    if(!s.power)return 'Apagado';
-    return ['Encendido',modes.find(v=>v.value===s.mode)?.name||s.mode,...(['dry','fan'].includes(s.mode)?[]:[s.temperature+' °C']),fanDescription(s.fan),swingDescription(s)].join(' · ');
+  const savedStateFor = (d,s=d.state,fields=controlledStateFields(d,s)) => findSavedState(d,s,fields);
+  function configurationLabel(s,fields=['power','mode','temperature','fan','swing']) {
+    if(fields.includes('power')&&s.power===false)return 'Apagado';
+    return [fields.includes('power')?'Encendido':'',fields.includes('mode')?(modes.find(v=>v.value===s.mode)?.name||s.mode):'',fields.includes('temperature')&&!(fields.includes('mode')&&['dry','fan'].includes(s.mode))?s.temperature+' °C':'',fields.includes('fan')?fanDescription(s.fan):'',fields.includes('swing')?swingDescription(s):''].filter(Boolean).join(' · ');
   }
   const ambientFor = d => {
     const emitter=emitterFor(d.id),source=catalog.find(item=>item.id===emitter?.sourceId);
@@ -136,9 +148,9 @@ export function mountStudio(root,api,initial,isAdmin,openMenu) {
     d.state.temperature = clamp(d.state.temperature,18,30,24);
     if (!modes.some(m=>m.value===d.state.mode)) d.state.mode='cool';
     if (!fans.some(f=>f.value===d.state.fan)) d.state.fan='auto';
-    d.savedStates=(Array.isArray(d.savedStates)?d.savedStates:[]).filter(record=>record&&typeof record.id==='string'&&typeof record.name==='string'&&record.settings&&(record.settings.power===false||(modes.some(v=>v.value===record.settings.mode)&&fans.some(v=>v.value===record.settings.fan))));
+    if(!Array.isArray(d.savedStates))d.savedStates=[];
+    if(d.savedStates.some(record=>!record||typeof record.id!=='string'||typeof record.name!=='string'||!record.settings||!recordStateFields(record)||(recordStateFields(record).includes('power')&&typeof record.settings.power!=='boolean')))return false;
     d.savedStates.forEach(record=>{
-      record.settings=configurationCopy({...record.settings,temperature:clamp(record.settings.temperature,18,30,24)});
       if(!record.signal||record.signal.kind!=='learned'||typeof record.signal.id!=='string')record.signal=null;
     });
     d.icon = deviceIcons.some(i=>i.value===d.icon) ? d.icon : 'remote';
@@ -286,7 +298,8 @@ export function mountStudio(root,api,initial,isAdmin,openMenu) {
   function closeModal() {if (modal.open) modal.close();}
   function openNeutralDialog(dialog) {
     const heading=dialog.querySelector('.modal-head h2')||dialog;heading.tabIndex=-1;heading.setAttribute('autofocus','');dialog.setAttribute('autofocus','');
-    const restoreScroll=captureScrollPosition();dialog.showModal();heading.focus({preventScroll:true});restoreScroll();
+    const restoreScroll=captureScrollPosition();modalScroll.lock(dialog);
+    try{dialog.showModal();heading.focus({preventScroll:true});restoreScroll();}catch(error){modalScroll.unlock(dialog);throw error;}
   }
   function showModal(title,body,buttons,setup) {
     if (modal.open) modal.close();
@@ -329,7 +342,7 @@ export function mountStudio(root,api,initial,isAdmin,openMenu) {
   entityModal.addEventListener('cancel',event=>event.stopPropagation());
   const currentMode = state => modes.find(m=>m.value===state.mode) || modes[0];
   const temperatureAvailable = d => !['dry','fan'].includes(d.state.mode);
-  const stateText = d => [currentMode(d.state).name,temperatureAvailable(d) ? d.state.temperature+' °C' : '',fanDescription(d.state.fan)].filter(Boolean).join(' · ');
+  const stateText = d => configurationLabel(d.state,controlledStateFields(d)).replace(/^Encendido(?: · )?/,'');
   function displayAccent(value) {return /^#[0-9a-f]{6}$/i.test(value||'')&&value.toLowerCase()!=='#b9c9b0'?value:'#f4f6f8';}
   function refreshAmbientReadings() {
     if(disposed)return;
@@ -375,7 +388,7 @@ export function mountStudio(root,api,initial,isAdmin,openMenu) {
     const dual=b.type==='dual',visual=dual?dualActions(b,d)[dualStateIndex(d,b)]:b;
     const symbol=buttonSymbol(d,b,visual);
     const stateTitle=d.type==='stateful'&&b.type==='group'?(b.group==='mode'?'Modo: '+currentMode(d.state).name:b.group==='fan'?fanDescription(d.state.fan):b.group==='swing'?swingDescription(d.state):''):'';
-    const unavailable=d.type==='stateful' && ['temp_up','temp_down'].includes(visual.action) && !temperatureAvailable(d);
+    const unavailable=d.type==='stateful'&&b.sendMode!=='independent'&&['temp_up','temp_down'].includes(visual.action)&&!temperatureAvailable(d);
     const pressed=dualPowerLinked(d,b)?d.state.power:dualStateIndex(d,b)===1;
     const visibleText=visual.name;
     const label=dual?b.name+': '+(visibleText||visual.name||actionOptions.find(action=>action.value===visual.action)?.name||'Acción'):b.name;
@@ -397,7 +410,7 @@ export function mountStudio(root,api,initial,isAdmin,openMenu) {
   function renderRemote() {
     const d=selected();if(!d){view='home';renderHome();return;}
     const e=emitterFor(d.id);
-    app.innerHTML='<div class="page-head"><div class="identity"><button class="btn text" data-home>'+glyph('arrow-left')+'Emisores</button><div><h1>'+esc(d.name)+'</h1><p class="muted">'+esc(e?.name || '')+'</p></div></div><div class="page-actions">'+(editing?'<button class="btn text" data-device-settings>'+glyph('pencil')+'Nombre e icono</button>':'')+'<button class="btn'+(editing?' primary':'')+'" data-edit>'+glyph(editing?'check':'settings')+(editing?'Listo':'Editar mando')+'</button></div></div>'+
+    app.innerHTML='<div class="remote-header"><div class="remote-navigation"><button class="btn text" data-home>'+glyph('arrow-left')+'Emisores</button><span class="muted remote-emitter">'+esc(e?.name||'')+'</span></div><div class="page-head remote-head"><div class="identity"><div><h1>'+esc(d.name)+'</h1></div></div><div class="page-actions">'+(editing?'<button class="btn text" data-device-settings>'+glyph('pencil')+'Nombre e icono</button>':'')+'<button class="btn'+(editing?' primary':'')+'" data-edit>'+glyph(editing?'check':'settings')+(editing?'Listo':'Editar mando')+'</button></div></div></div>'+
       (editing?'<div class="editor-note">'+glyph('move')+'<span>Arrastra los botones para colocarlos. Pulsa un elemento para editarlo.</span></div>':'')+
       '<div class="remote-canvas'+(editing?' editing':'')+'">'+d.rows.map((r,index)=>'<section class="layout-row'+(editing?' edit-area':'')+'" data-row="'+esc(r.id)+'" style="--level:'+r.height+'">'+(editing?rowTools(r,index):'')+
       (r.type==='display'?'<div class="display-preview">'+displayHTML(d,r)+'</div>':'<div class="row-grid" style="--cols:'+r.columns+';--level:'+r.height+'">'+r.cells.map((b,i)=>buttonHTML(d,b,r,i)).join('')+'</div>')+'</section>').join('')+
@@ -417,19 +430,20 @@ export function mountStudio(root,api,initial,isAdmin,openMenu) {
   }
   function getButton(d,id) {for(const r of d.rows){const i=r.cells?.findIndex(b=>b?.id===id);if(i>=0)return {row:r,index:i,button:r.cells[i]};}return null;}
   function stateCapturePanel(d) {
+    const fields=controlledStateFields(d);
     let record=(d.savedStates||[]).find(item=>item.id===viewedSavedStateId);
-    if(record&&configurationKey(record.settings)!==configurationKey(d.state)){viewedSavedStateId=null;record=null;}
+    if(record&&!stateRecordMatches(record,d.state,recordStateFields(record))){viewedSavedStateId=null;record=null;}
     record=record||savedStateFor(d);
     const ready=!!record?.signal;
     const status=ready?'Estado aprendido':record?'Sin señal':'Sin aprender';
-    return '<section class="state-capture-panel" aria-labelledby="current-state-title"><div class="state-capture-heading"><h2 id="current-state-title">Estado actual</h2><span class="state-status '+(ready?'available':'missing')+'">'+status+'</span></div><p class="state-summary">'+esc(configurationLabel(d.state))+'</p>'+
-      '<div class="state-capture-actions">'+(record?'<button class="btn primary" data-relearn-state="'+esc(record.id)+'">'+glyph('radio')+(ready?'Reaprender señal':'Aprender señal del mando original')+'</button>'+(ready?'<button class="btn danger" data-clear-state-signal="'+esc(record.id)+'">'+glyph('trash')+'Borrar señal</button>':'')+'<button class="btn danger" data-delete-saved-state="'+esc(record.id)+'">'+glyph('trash')+'Eliminar estado y entidad</button>':'<button class="btn primary" data-learn-state>'+glyph('radio')+'Aprender estado</button>')+
-      '</div>'+(!ready?'<p class="small muted state-capture-hint">'+(record?'La entidad se conserva. Aprende una señal para volver a utilizar este estado.':d.state.power?'Prepara estos mismos ajustes en el mando original y aprende la señal para guardar este estado.':'Aprende la señal de apagar del mando original.')+'</p>':'')+stateTable(d,record)+'</section>';
+    return '<section class="state-capture-panel" aria-labelledby="current-state-title"><div class="state-capture-heading"><h2 id="current-state-title">Estado actual</h2><span class="state-status '+(ready?'available':'missing')+'">'+status+'</span></div><p class="state-summary">'+esc(fields.length?configurationLabel(d.state,fields):'Todos los ajustes se controlan por separado.')+'</p>'+
+      '<div class="state-capture-actions">'+(record?'<button class="btn primary" data-relearn-state="'+esc(record.id)+'">'+glyph('radio')+(ready?'Reaprender señal':'Aprender señal del mando original')+'</button>'+(ready?'<button class="btn danger" data-clear-state-signal="'+esc(record.id)+'">'+glyph('trash')+'Borrar señal</button>':'')+'<button class="btn danger" data-delete-saved-state="'+esc(record.id)+'">'+glyph('trash')+'Eliminar estado y entidad</button>':fields.length?'<button class="btn primary" data-learn-state>'+glyph('radio')+'Aprender estado</button>':'')+
+      '</div>'+(!ready&&fields.length?'<p class="small muted state-capture-hint">'+(record?'La entidad se conserva. Aprende una señal para volver a utilizar este estado.':!fields.includes('power')?'Prepara estos ajustes en el mando original y aprende la señal que los envía.':d.state.power?'Prepara estos mismos ajustes en el mando original y aprende la señal para guardar este estado.':'Aprende la señal de apagar del mando original.')+'</p>':'')+stateTable(d,record)+'</section>';
   }
   function stateTable(d,current) {
     const records=d.savedStates||[];if(!records.length)return '';
     return '<table class="state-table" aria-label="Estados y entidades"><thead><tr><th scope="col">Estado</th><th scope="col">Entidad</th></tr></thead><tbody>'+records.map(record=>{
-      const active=record.id===current?.id,label=record.name||configurationLabel(record.settings);
+      const active=record.id===current?.id,label=record.name||configurationLabel(record.settings,recordStateFields(record));
       return '<tr'+(active?' class="is-current"':'')+'><td><button type="button" class="state-table-select" data-view-saved-state="'+esc(record.id)+'"'+(active?' aria-current="true"':'')+' aria-label="Ver estado '+esc(label)+'">'+esc(label)+'</button></td><td><div class="state-table-entity"><code>'+esc(record.entity)+'</code><button type="button" class="icon-btn state-copy" data-copy-state-entity="'+esc(record.id)+'" aria-label="Copiar entidad '+esc(record.entity)+'" title="Copiar entidad">'+glyph('copy')+'</button></div></td></tr>';
     }).join('')+'</tbody></table>'+(isAdmin?'<div class="state-capture-actions"><button type="button" class="btn danger" data-delete-all-states>'+glyph('trash')+'Borrar todos los estados</button></div>':'');
   }
@@ -444,22 +458,24 @@ export function mountStudio(root,api,initial,isAdmin,openMenu) {
     if(signalBusy){toast('Hay un aprendizaje en curso. Espera a que termine.');return;}
     const existing=id?(d.savedStates||[]).find(record=>record.id===id):savedStateFor(d);
     if(id&&!existing)return;
-    const settings=configurationCopy(existing?.settings||d.state),recordId=existing?.id||uid();
-    const initialName=existing?.name||configurationLabel(settings);
+    const fields=existing?recordStateFields(existing):controlledStateFields(d);
+    if(!fields.length){toast('Todos los ajustes se controlan por separado. No hay un estado general que aprender.');return;}
+    const settings=existing?copy(existing.settings):projectState(d.state,fields),recordId=existing?.id||uid();
+    const initialName=existing?.name||configurationLabel(settings,fields);
     let capture=null;
     const readName=()=>$('#state-record-name').value.trim();
     const readEntity=()=>existing?existing.entity:proposedStateEntity(d,readName(),recordId);
     showModal(existing?'Reaprender señal del estado':'Aprender estado del mando original',
       field('Nombre del estado','<input id="state-record-name" maxlength="120" value="'+esc(initialName)+'">')+
       '<div class="state-entity"><span>Entidad'+(existing?'':' que se guardará')+'</span><code id="state-record-entity">'+esc(existing?.entity||proposedStateEntity(d,initialName,recordId))+'</code></div>'+
-      '<p class="small">'+(settings.power?'Prepara estos ajustes en el mando original. Con el mando apagado, apunta a '+esc(emitterFor(d.id)?.name||'tu emisor')+' y pulsa Encender para capturar esta configuración completa.':'Apunta el mando original a '+esc(emitterFor(d.id)?.name||'tu emisor')+' y pulsa la tecla de apagar. Solo se guardará el estado Apagado.')+'</p>'+
+      '<p class="small">'+(!fields.includes('power')?'Prepara estos ajustes en el mando original. Apunta al receptor y pulsa la tecla que envía estos ajustes sin cambiar las funciones independientes.':settings.power?'Prepara estos ajustes en el mando original. Con el mando apagado, apunta a '+esc(emitterFor(d.id)?.name||'tu emisor')+' y pulsa Encender para capturar esta configuración completa.':'Apunta el mando original a '+esc(emitterFor(d.id)?.name||'tu emisor')+' y pulsa la tecla de apagar. Solo se guardará el estado Apagado.')+'</p>'+
       '<div class="state-learn-status listening" id="state-learn-status" role="status" aria-live="polite"><span class="state-learn-symbol">'+glyph('radio')+'</span><strong>Preparado para recibir la señal</strong><span>El estado se guardará al recibirla y pulsar «'+(existing?'Guardar señal':'Guardar estado')+'».</span></div>'+
       '<button type="button" class="btn" id="retry-state-capture" hidden>Volver a escuchar</button><button type="button" class="btn" id="test-state-capture" hidden>Probar señal</button><p id="form-error" class="warning" role="alert" hidden></p>',
       [{label:'Cancelar'},{label:existing?'Guardar señal':'Guardar estado',className:'primary',run:async()=>{
         if(!capture){formError('Recibe una señal antes de guardar el estado.');return;}
         const name=readName();if(!name){formError('Escribe un nombre para el estado.');return;}
         d.savedStates=d.savedStates||[];
-        const matched=savedStateFor(d,settings);
+        const matched=savedStateFor(d,settings,fields);
         if(existing){
           const current=d.savedStates.find(record=>record.id===recordId);
           if(!current){formError('Este estado ya no está guardado.');return;}
@@ -467,7 +483,7 @@ export function mountStudio(root,api,initial,isAdmin,openMenu) {
         }else if(matched){
           matched.name=name;matched.signal=copy(capture);matched.updatedAt=new Date().toISOString();
         }else{
-          d.savedStates.push({id:recordId,name,entity:readEntity(),settings:copy(settings),signal:copy(capture),createdAt:new Date().toISOString()});
+          d.savedStates.push({id:recordId,name,entity:readEntity(),settings:copy(settings),controlled_fields:[...fields],signal:copy(capture),createdAt:new Date().toISOString()});
         }
         if(await persist()){closeModal();render();toast(existing?'Señal del estado actualizada.':'Estado guardado.');}
       }}],()=>{
@@ -478,7 +494,7 @@ export function mountStudio(root,api,initial,isAdmin,openMenu) {
           if(signalBusy)return;signalBusy=true;const token=++operation;
           const status=$('#state-learn-status'),retry=$('#retry-state-capture'),test=$('#test-state-capture');
           retry.hidden=true;test.hidden=true;save.disabled=true;
-          status.classList.remove('available');status.classList.add('listening');status.innerHTML='<span class="state-learn-symbol">'+glyph('radio')+'</span><strong>Escuchando el mando original</strong><span>Apunta al receptor y pulsa '+(settings.power?'Encender':'Apagar')+' en el mando original.</span>';
+          status.classList.remove('available');status.classList.add('listening');status.innerHTML='<span class="state-learn-symbol">'+glyph('radio')+'</span><strong>Escuchando el mando original</strong><span>Apunta al receptor y pulsa '+(!fields.includes('power')?'la tecla correspondiente':settings.power?'Encender':'Apagar')+' en el mando original.</span>';
           try{
             await saveQueue;if(saveFailed)throw new Error('No se han guardado los cambios del mando.');
             const result=await queueRequest(()=>api.call('learn',{source_id:emitterFor(d.id).sourceId,device_id:d.id,function_key:recordId,signal:'press'}));
@@ -496,13 +512,13 @@ export function mountStudio(root,api,initial,isAdmin,openMenu) {
   }
   function clearStateSignal(d,id) {
     const record=(d.savedStates||[]).find(item=>item.id===id);if(!record?.signal)return;
-    showModal('Borrar señal aprendida','<p>'+esc(record.name||configurationLabel(record.settings))+'</p><div class="state-entity"><span>Entidad que se conserva</span><code>'+esc(record.entity)+'</code></div><div class="warning"><span aria-hidden="true">⚠</span><div><strong>Borrado definitivo de la señal.</strong><p>Se conservarán este estado y su entidad. Las automatizaciones que la utilicen dejarán de ejecutar esta función hasta que vuelvas a aprender una señal.</p></div></div>',[
+    showModal('Borrar señal aprendida','<p>'+esc(record.name||configurationLabel(record.settings,recordStateFields(record)))+'</p><div class="state-entity"><span>Entidad que se conserva</span><code>'+esc(record.entity)+'</code></div><div class="warning"><span aria-hidden="true">⚠</span><div><strong>Borrado definitivo de la señal.</strong><p>Se conservarán este estado y su entidad. Las automatizaciones que la utilicen dejarán de ejecutar esta función hasta que vuelvas a aprender una señal.</p></div></div>',[
       {label:'Cancelar'},{label:'Borrar señal',className:'danger',run:()=>{record.signal=null;record.signal_refs={};persist();closeModal();render();toast('Señal borrada. El estado y la entidad se conservan.');}}
     ]);
   }
   function deleteSavedState(d,id) {
     const record=(d.savedStates||[]).find(item=>item.id===id);if(!record)return;
-    showModal('Eliminar estado y entidad','<p>'+esc(record.name||configurationLabel(record.settings))+'</p><div class="state-entity"><span>Entidad</span><code>'+esc(record.entity)+'</code></div><div class="warning"><span aria-hidden="true">⚠</span><div><strong>Eliminación definitiva.</strong><p>Se eliminarán este estado, su señal aprendida y su entidad. Las automatizaciones, scripts y paneles que utilicen esta entidad dejarán de ejecutar esta función. Esta acción no se puede deshacer.</p></div></div>',[
+    showModal('Eliminar estado y entidad','<p>'+esc(record.name||configurationLabel(record.settings,recordStateFields(record)))+'</p><div class="state-entity"><span>Entidad</span><code>'+esc(record.entity)+'</code></div><div class="warning"><span aria-hidden="true">⚠</span><div><strong>Eliminación definitiva.</strong><p>Se eliminarán este estado, su señal aprendida y su entidad. Las automatizaciones, scripts y paneles que utilicen esta entidad dejarán de ejecutar esta función. Esta acción no se puede deshacer.</p></div></div>',[
       {label:'Cancelar'},{label:'Eliminar estado y entidad',className:'danger',run:()=>{d.savedStates=d.savedStates.filter(item=>item.id!==id);persist();closeModal();render();toast('Estado y entidad eliminados de IR Pro.');}}
     ]);
   }
@@ -525,7 +541,7 @@ export function mountStudio(root,api,initial,isAdmin,openMenu) {
   function viewSavedState(d,id) {
     const record=(d.savedStates||[]).find(item=>item.id===id);if(!record)return;
     viewedSavedStateId=record.id;
-    Object.assign(d.state,configurationCopy(record.settings));render();
+    Object.assign(d.state,projectState(record.settings,recordStateFields(record)));render();
   }
   async function copySavedStateEntity(d,id) {
     const record=(d.savedStates||[]).find(item=>item.id===id);if(!record)return;
@@ -540,17 +556,28 @@ export function mountStudio(root,api,initial,isAdmin,openMenu) {
     }
     toast(copied?'Entidad copiada.':'No se ha podido copiar la entidad.');
   }
+  function adoptCommandEnvelope(result,d,sourceId) {
+    const emitter=result?.model?.emitters?.find(item=>item.sourceId===sourceId&&item.devices?.some(device=>device.id===d.id));
+    const state=emitter?.devices.find(device=>device.id===d.id)?.studio?.state;
+    if(!Number.isInteger(result?.revision)||!state||typeof state.power!=='boolean'||!modes.some(option=>option.value===state.mode)||!Number.isInteger(state.temperature)||state.temperature<18||state.temperature>30||!fans.some(option=>option.value===state.fan)||!swingStates.some(option=>option.value===state.swing))throw new Error('No se ha podido confirmar el estado del mando. Recarga el panel antes de continuar.');
+    const canonical=importModel(result.model,model.selected);
+    if(!canonical.emitters.every(item=>item.devices.every(validateDevice)))throw new Error('No se ha podido confirmar la configuración del mando. Recarga el panel antes de continuar.');
+    confirmedWire=copy(result.model);revision=result.revision;catalog=result.catalog||catalog;model=canonical;
+    d.state=copy(state);
+  }
   async function commitState(d,message,transmit) {
-    const state=configurationCopy(d.state);
+    if(independentSending){toast('Espera a que termine el envío.');return false;}
+    const state=copy(d.state),fields=controlledStateFields(d),sourceId=emitterFor(d.id)?.sourceId,locked=transmit&&fields.length>0;
+    if(locked)independentSending=true;
     render();
-    return persist(async()=>{
-      if(!transmit){toast(message);return true;}
-      if(!savedStateFor(d,state)?.signal){clearActionError();return false;}
-      const result=await api.call('send_state',{device_id:d.id,state});
+    try{return await persist(async()=>{
+      if(!transmit||!fields.length){toast(message);return true;}
+      if(!savedStateFor(d,state,fields)?.signal){clearActionError();return false;}
+      const result=await api.call('send_state',{device_id:d.id,state,controlled_fields:fields});
       if(disposed)return false;
-      if(result.model){confirmedWire=copy(result.model);revision=result.revision;catalog=result.catalog||catalog;reconcileCanonical(model,result.model);}
+      adoptCommandEnvelope(result,d,sourceId);render();
       toast('Señal enviada · '+message+' · Estado estimado');return true;
-    });
+    });}finally{if(locked)independentSending=false;}
   }
   async function execute(d,b) {
     if(b.type==='group'){openGroup(d,b);return false;}
@@ -565,17 +592,7 @@ export function mountStudio(root,api,initial,isAdmin,openMenu) {
     try{return await queuePhysical(async()=>{
       const result=await api.call('press',{function_key:key});
       if(disposed)return false;
-      if(Object.hasOwn(result||{},'model')){
-        const emitter=result.model?.emitters?.find(item=>item.sourceId===sourceId&&item.devices?.some(device=>device.id===d.id));
-        const state=emitter?.devices.find(device=>device.id===d.id)?.studio?.state;
-        if(!Number.isInteger(result.revision)||!state||typeof state.power!=='boolean'||!modes.some(option=>option.value===state.mode)||!Number.isInteger(state.temperature)||state.temperature<18||state.temperature>30||!fans.some(option=>option.value===state.fan)||!swingStates.some(option=>option.value===state.swing))throw new Error('No se ha podido confirmar el estado del mando. Recarga el panel antes de continuar.');
-        const canonical=importModel(result.model,model.selected);
-        if(!canonical.emitters.every(item=>item.devices.every(validateDevice)))throw new Error('No se ha podido confirmar la configuración del mando. Recarga el panel antes de continuar.');
-        confirmedWire=copy(result.model);revision=result.revision;catalog=result.catalog||catalog;model=canonical;
-        // Another client can change settings or remove the action during send.
-        // The returned state is authoritative; never reapply the old effect.
-        d.state=copy(state);
-      }else Object.assign(d.state,effect);
+      adoptCommandEnvelope(result,d,sourceId);
       render();toast('Señal enviada · '+name+' · Estado estimado');return true;
     });}finally{independentSending=false;}
   }
@@ -585,20 +602,38 @@ export function mountStudio(root,api,initial,isAdmin,openMenu) {
     if (b.type==='group') {openGroup(d,b);return false;}
     if (b.type==='dual') {
       const index=dualStateIndex(d,b),linked=dualPowerLinked(d,b),side=dualActions(b,d)[index];
+      if(d.type==='stateful'&&b.sendMode==='independent'&&b._existingType!=='switch'){
+        const choice=independentChoices(b).find(item=>item.action_index===index),child=choice&&independentActionFor(b,choice.value,index);
+        if(!child){toast('Sin señal. Aprende esta acción al editar el botón.');return false;}
+        // The backend advances the parent phase atomically with the child press.
+        return executeIndependent(d,child);
+      }
       if(d.type==='simple'||b._existingType==='switch'){
         return queuePhysical(async()=>{const result=await api.call('press',{function_key:b.id,on:b.activeSide!==1});if(disposed)return false;b.activeSide=result.on?1:0;b.on=result.on;render();toast('Señal enviada · Estado estimado');return true;});
       }
+      const sourceId=emitterFor(d.id)?.sourceId,signature=JSON.stringify(dualActions(b,d).map(action=>[action.action,action.value||'']));
       const success=await executeAction(d,{...side,id:b.id,type:'button'});
-      if(success&&!linked){b.activeSide=1-index;persist();render();}
+      if(success&&!linked){
+        const currentDevice=model.emitters.find(emitter=>emitter.sourceId===sourceId&&emitter.devices.some(device=>device.id===d.id))?.devices.find(device=>device.id===d.id);
+        const locate=node=>{if(node?.id===b.id)return node;if(node?.type==='group'&&node.group==='custom')for(const child of node.children||[]){const found=locate(child);if(found)return found;}};
+        const current=currentDevice?.rows.flatMap(row=>row.cells||[]).map(locate).find(Boolean);
+        if(current?.type==='dual'&&current._existingType!=='switch'&&current.sendMode!=='independent'&&current.activeSide===index&&JSON.stringify(dualActions(current,currentDevice).map(action=>[action.action,action.value||'']))===signature){current.activeSide=1-index;const saved=await persist();render();return saved;}
+      }
       return success;
+    }
+    if(d.type==='stateful'&&b.sendMode==='independent'&&linkedActionEffect(b)){
+      const choice=independentChoices(b)[0],child=choice&&independentActionFor(b,choice.value,0);
+      if(!child){toast('Sin señal. Aprende esta acción al editar el botón.');return false;}
+      return executeIndependent(d,child);
     }
     if (b.action==='learned') {
       if(independentStateEffect(b))return executeIndependent(d,b);
       return queuePhysical(async()=>{if(!b.id)throw new Error('Esta función no tiene una señal aprendida.');await api.call('press',{function_key:b.id});if(!disposed)toast('Señal enviada · '+b.name);return true;});
     }
-    const s=d.state;let label='Ajustes actualizados';
-    if (b.action==='power_on') {s.power=true;return commitState(d,'Encendido · '+stateText(d),true);}
-    if (b.action==='power_off') {s.power=false;return commitState(d,'Apagado',true);}
+    const s=d.state,fields=controlledStateFields(d,{...d.state,power:true}),field=actionStateField(b),separate=field&&!fields.includes(field);
+    const separateHint=' · Este ajuste se controla por separado. Configura su señal independiente o vuelve sus controles a Ajustes del mando.';let label='Ajustes actualizados';
+    if (b.action==='power_on') {s.power=true;return commitState(d,'Encendido · '+stateText(d)+(separate?separateHint:''),!separate);}
+    if (b.action==='power_off') {s.power=false;return commitState(d,'Apagado'+(separate?separateHint:''),!separate);}
     if (b.action==='temp_up'||b.action==='temp_down') {
       if (!temperatureAvailable(d)) {toast('Este modo no permite ajustar la temperatura.');return false;}
       const next=clamp(s.temperature+(b.action==='temp_up'?1:-1),18,30,24);
@@ -608,7 +643,7 @@ export function mountStudio(root,api,initial,isAdmin,openMenu) {
     else if(b.action==='set_swing'&&swingStates.some(option=>option.value===b.value)){s.swing=b.value;label=swingDescription(s);}
     else if(b.action==='swing'){s.swing=swingValue(s)==='auto'?'off':'auto';label=swingDescription(s);}
     else {toast('Esta función todavía no tiene una acción asignada.');return false;}
-    return commitState(d,label+(s.power?'':' · Preparado para el próximo encendido'),s.power);
+    return commitState(d,label+(separate?separateHint:!s.power&&fields.includes('power')?' · Preparado para el próximo encendido':''),!separate&&(s.power||!fields.includes('power')));
   }
   function openGroup(d,b) {
     let choices=[];
@@ -721,7 +756,16 @@ export function mountStudio(root,api,initial,isAdmin,openMenu) {
       });
     };
     const entityField=b=>'<section class="entity-field"><span>Entidad</span><div class="entity-value"><code>'+esc(b.entity)+'</code><button type="button" class="icon-btn" data-entity-edit="'+esc(b.id)+'" aria-label="Cambiar nombre de la entidad de '+esc(b.name)+'">'+glyph('pencil')+'</button></div><p class="entity-hint">'+(entityDomain(d,b)==='switch'?'Automatizaciones: switch.turn_on / switch.turn_off.':'Automatizaciones: button.press.')+'</p></section>';
+    const sendModeOptions=[{value:'settings',name:'Ajustes del mando'},{value:'independent',name:'Acción independiente'}];
+    const sendModeHint='Si algún control de este ajuste es independiente, el ajuste queda fuera del estado general.';
     const renderEntityFields=()=>{
+      const prepare=node=>{if(!node)return;ensureIndependentActions(node);if(node.type==='group'&&node.group==='custom')(node.children||[]).forEach(prepare);};prepare(draft);
+      const sendTarget=$('#function-send-mode');
+      if(sendTarget){
+        const eligible=d.type==='stateful'&&['button','dual'].includes(draft.type)&&independentChoices(draft).length;
+        sendTarget.innerHTML=eligible?field('Cómo envía la señal','<select id="control-send-mode">'+selectOptions(sendModeOptions,draft.sendMode==='independent'?'independent':'settings')+'</select>')+'<p class="muted small">'+(draft.type==='dual'?'Se aplica a las dos acciones. ':'')+sendModeHint+'</p>':'';
+        $('#control-send-mode')?.addEventListener('change',event=>{draft.sendMode=event.target.value;renderEntityFields();},{signal:modalAbort.signal});
+      }
       syncDraftEntities();
       const root=$('#function-entity');if(root)root.innerHTML=entityDomain(d,draft)?entityField(draft):'';
       $$('[data-child-entity]',modalBody).forEach(target=>{const child=automationButtons(d,draft).find(b=>b.id===target.dataset.childEntity);target.innerHTML=child?entityField(child):'';});
@@ -734,7 +778,7 @@ export function mountStudio(root,api,initial,isAdmin,openMenu) {
       const visit=node=>{
         if(entityDomain(d,node))functions.push(node);
         if(node.type==='group'&&node.group==='custom')(node.children||[]).forEach(visit);
-        else if(node.type==='group'&&node.sendMode==='independent')officialGroupChoices(node).forEach(choice=>{const action=independentActionFor(node,choice.value);if(action)visit(action);});
+        else if(node.sendMode==='independent')independentChoices(node).forEach(choice=>{const action=independentActionFor(node,choice.value,choice.action_index);if(action)visit(action);});
       };visit(draft);
       target.innerHTML=functions.length?'<div class="function-signal-list">'+functions.flatMap(node=>(entityDomain(d,node)==='switch'?['on','off']:['press']).map(signal=>{
         const ref=node.signals?.[signal]===true?node.signal_refs?.[signal]:null,label=signal==='press'?node.name:(signal==='on'?'Encender':'Apagar')+' · Acción '+(signal==='on'?'1':'2');
@@ -833,12 +877,13 @@ export function mountStudio(root,api,initial,isAdmin,openMenu) {
     const renderChildren=()=>{
       const target=$('#folder-children');if(!target)return;
       const children=draft.children;
-      target.innerHTML=children.map((child,index)=>'<div class="child-config">'+field('Nombre','<input data-child-name="'+index+'" value="'+esc(child.name)+'" maxlength="40">')+'<label class="dual-show-name"><input type="checkbox" data-child-show="'+index+'"'+(child.showName!==false?' checked':'')+'>Mostrar texto</label>'+field('Icono','<select data-child-icon="'+index+'">'+selectOptions(symbols,child.icon)+'</select>')+field('Acción','<select data-child-action="'+index+'">'+selectOptions(allowedActions,child.action)+'</select>')+(actionValueChoices(child.action)?field(actionValueLabel(child.action),'<select data-child-value="'+index+'">'+selectOptions(actionValueChoices(child.action),child.value||defaultActionValue(child.action))+'</select>'):'')+'<div data-child-entity="'+esc(child.id)+'"></div><button class="btn text" data-remove-child="'+index+'">'+glyph('trash')+'Quitar botón</button></div>').join('')+'<button class="btn" id="add-folder-child">'+glyph('plus')+'Añadir botón a la carpeta</button>';
+      target.innerHTML=children.map((child,index)=>'<div class="child-config">'+field('Nombre','<input data-child-name="'+index+'" value="'+esc(child.name)+'" maxlength="40">')+'<label class="dual-show-name"><input type="checkbox" data-child-show="'+index+'"'+(child.showName!==false?' checked':'')+'>Mostrar texto</label>'+field('Icono','<select data-child-icon="'+index+'">'+selectOptions(symbols,child.icon)+'</select>')+field('Acción','<select data-child-action="'+index+'">'+selectOptions(allowedActions,child.action)+'</select>')+(actionValueChoices(child.action)?field(actionValueLabel(child.action),'<select data-child-value="'+index+'">'+selectOptions(actionValueChoices(child.action),child.value||defaultActionValue(child.action))+'</select>'):'')+(d.type==='stateful'&&independentChoices(child).length?field('Cómo envía la señal','<select data-child-send-mode="'+index+'">'+selectOptions(sendModeOptions,child.sendMode==='independent'?'independent':'settings')+'</select>')+'<p class="muted small">'+sendModeHint+'</p>':'')+'<div data-child-entity="'+esc(child.id)+'"></div><button class="btn text" data-remove-child="'+index+'">'+glyph('trash')+'Quitar botón</button></div>').join('')+'<button class="btn" id="add-folder-child">'+glyph('plus')+'Añadir botón a la carpeta</button>';
       $$('[data-child-name]',target).forEach(input=>input.addEventListener('input',()=>{children[Number(input.dataset.childName)].name=input.value;renderEntityFields();},{signal:modalAbort.signal}));
       $$('[data-child-show]',target).forEach(input=>input.addEventListener('change',()=>children[Number(input.dataset.childShow)].showName=input.checked,{signal:modalAbort.signal}));
       $$('[data-child-icon]',target).forEach(input=>input.addEventListener('change',()=>children[Number(input.dataset.childIcon)].icon=input.value,{signal:modalAbort.signal}));
       $$('[data-child-action]',target).forEach(input=>input.addEventListener('change',()=>{const child=children[Number(input.dataset.childAction)];child.action=input.value;child.value=defaultActionValue(child.action);renderChildren();},{signal:modalAbort.signal}));
-      $$('[data-child-value]',target).forEach(input=>input.addEventListener('change',()=>children[Number(input.dataset.childValue)].value=input.value,{signal:modalAbort.signal}));
+      $$('[data-child-value]',target).forEach(input=>input.addEventListener('change',()=>{children[Number(input.dataset.childValue)].value=input.value;renderEntityFields();},{signal:modalAbort.signal}));
+      $$('[data-child-send-mode]',target).forEach(input=>input.addEventListener('change',()=>{children[Number(input.dataset.childSendMode)].sendMode=input.value;renderEntityFields();},{signal:modalAbort.signal}));
       $$('[data-remove-child]',target).forEach(input=>input.addEventListener('click',()=>{children.splice(Number(input.dataset.removeChild),1);renderChildren();},{signal:modalAbort.signal}));
       $('#add-folder-child').addEventListener('click',()=>{children.push(button('Nuevo botón','remote','learned'));renderChildren();},{signal:modalAbort.signal});
       renderEntityFields();
@@ -852,7 +897,7 @@ export function mountStudio(root,api,initial,isAdmin,openMenu) {
         if(draft.group==='fan'){draft.fanSpeedCount=clamp(draft.fanSpeedCount,2,5,3);draft.fanAuto=draft.fanAuto!==false;}
         if(draft.group==='swing'){draft.swingPositionCount=clamp(draft.swingPositionCount,1,6,6);draft.swingAuto=draft.swingAuto!==false;draft.swingOff=draft.swingOff!==false;}
         if(official)ensureIndependentActions(draft);
-        target.innerHTML=field('Contenido de la carpeta','<select id="group-kind">'+selectOptions(groups,draft.group)+'</select>')+(official?field('Cómo envía la señal','<select id="group-send-mode">'+selectOptions([{value:'settings',name:'Ajustes del mando'},{value:'independent',name:'Acción independiente'}],draft.sendMode)+'</select>')+'<p class="muted small">'+(draft.sendMode==='independent'?'Cada opción envía su propia señal. Aprende una señal que cambie solo esta función y comprueba que conserve los demás ajustes.':'Cada opción cambia el ajuste del mando y utiliza la señal del estado completo que corresponda.')+'</p>':'')+(draft.group==='custom'?'<div id="folder-children" class="stack"></div>':draft.group==='fan'?field('Cantidad de velocidades','<select id="fan-speed-count">'+selectOptions([2,3,4,5].map(n=>({value:String(n),name:String(n)})),String(draft.fanSpeedCount))+'</select>')+checkField('fan-auto','Tiene modo automático',draft.fanAuto):draft.group==='swing'?field('Cantidad de posiciones fijas','<select id="swing-position-count">'+selectOptions([1,2,3,4,5,6].map(n=>({value:String(n),name:String(n)})),String(draft.swingPositionCount))+'</select>')+checkField('swing-auto','Tiene oscilación automática',draft.swingAuto)+checkField('swing-off','Permite desactivar la oscilación',draft.swingOff):'<p class="muted small">La carpeta abre una tarjeta centrada con las opciones del mando.</p>');
+        target.innerHTML=field('Contenido de la carpeta','<select id="group-kind">'+selectOptions(groups,draft.group)+'</select>')+(official?field('Cómo envía la señal','<select id="group-send-mode">'+selectOptions([{value:'settings',name:'Ajustes del mando'},{value:'independent',name:'Acción independiente'}],draft.sendMode)+'</select>')+'<p class="muted small">'+(draft.sendMode==='independent'?'Cada opción envía su propia señal. Si algún control de este ajuste es independiente, el ajuste queda fuera del estado general.':'Cada opción cambia el ajuste del mando y utiliza la señal del estado completo que corresponda.')+'</p>':'')+(draft.group==='custom'?'<div id="folder-children" class="stack"></div>':draft.group==='fan'?field('Cantidad de velocidades','<select id="fan-speed-count">'+selectOptions([2,3,4,5].map(n=>({value:String(n),name:String(n)})),String(draft.fanSpeedCount))+'</select>')+checkField('fan-auto','Tiene modo automático',draft.fanAuto):draft.group==='swing'?field('Cantidad de posiciones fijas','<select id="swing-position-count">'+selectOptions([1,2,3,4,5,6].map(n=>({value:String(n),name:String(n)})),String(draft.swingPositionCount))+'</select>')+checkField('swing-auto','Tiene oscilación automática',draft.swingAuto)+checkField('swing-off','Permite desactivar la oscilación',draft.swingOff):'<p class="muted small">La carpeta abre una tarjeta centrada con las opciones del mando.</p>');
         $('#group-kind')?.addEventListener('change',event=>{draft.group=event.target.value;if(draft.group==='swing'&&['folder','wind'].includes(draft.icon)){draft.icon='swing';$('#button-icon').value='swing';$('#button-icon').dispatchEvent(new Event('change',{bubbles:true}));}renderActionFields();preview();},{signal:modalAbort.signal});
         $('#group-send-mode')?.addEventListener('change',event=>{draft.sendMode=event.target.value;renderActionFields();},{signal:modalAbort.signal});
         $('#fan-speed-count')?.addEventListener('change',event=>{draft.fanSpeedCount=clamp(event.target.value,2,5,3);renderActionFields();preview();},{signal:modalAbort.signal});
@@ -876,11 +921,11 @@ export function mountStudio(root,api,initial,isAdmin,openMenu) {
         target.innerHTML=field('Acción','<select id="button-action">'+selectOptions(allowedActions,draft.action)+'</select>')+(actionValueChoices(draft.action)?field(actionValueLabel(draft.action),'<select id="action-value">'+selectOptions(actionValueChoices(draft.action),draft.value||defaultActionValue(draft.action))+'</select>'):draft.action==='learned'?'<p class="muted small">Aprende la señal del mando original. Probarla es opcional; puedes guardarla en cuanto se reciba.</p>':'');
         if(original?._existingType&&$('#button-action'))$('#button-action').disabled=true;
         $('#button-action')?.addEventListener('change',event=>{draft.action=event.target.value;draft.value=defaultActionValue(draft.action);renderActionFields();},{signal:modalAbort.signal});
-        $('#action-value')?.addEventListener('change',event=>draft.value=event.target.value,{signal:modalAbort.signal});
+        $('#action-value')?.addEventListener('change',event=>{draft.value=event.target.value;renderEntityFields();},{signal:modalAbort.signal});
       }
       renderEntityFields();
     };
-    showModal(original?'Editar función':'Añadir función',field('Tipo de función','<select id="function-type">'+selectOptions([{value:'button',name:'Botón'},{value:'dual',name:'Botón de doble acción'},{value:'group',name:'Carpeta'},{value:'display',name:'Pantalla'}],draft.type)+'</select>')+'<div id="button-live" class="button-live"></div><div id="button-appearance">'+field('Nombre','<input id="button-name" maxlength="40" value="'+esc(draft.name)+'">')+checkField('show-name','Mostrar texto',draft.showName)+'<div class="form-grid">'+field('Icono','<select id="button-icon">'+selectOptions(symbols,draft.icon)+'</select>')+field('Color','<input type="color" id="button-color" value="'+esc(draft.color)+'">')+'</div></div><div id="action-fields"></div><div id="function-entity"></div><div id="function-learning"></div><p id="form-error" class="warning" hidden></p>',[
+    showModal(original?'Editar función':'Añadir función',field('Tipo de función','<select id="function-type">'+selectOptions([{value:'button',name:'Botón'},{value:'dual',name:'Botón de doble acción'},{value:'group',name:'Carpeta'},{value:'display',name:'Pantalla'}],draft.type)+'</select>')+'<div id="button-live" class="button-live"></div><div id="button-appearance">'+field('Nombre','<input id="button-name" maxlength="40" value="'+esc(draft.name)+'">')+checkField('show-name','Mostrar texto',draft.showName)+'<div class="form-grid">'+field('Icono','<select id="button-icon">'+selectOptions(symbols,draft.icon)+'</select>')+field('Color','<input type="color" id="button-color" value="'+esc(draft.color)+'">')+'</div></div><div id="action-fields"></div><div id="function-send-mode"></div><div id="function-entity"></div><div id="function-learning"></div><p id="form-error" class="warning" hidden></p>',[
       ...(original?[{label:'Eliminar',className:'danger',run:()=>{closeModal();confirmDelete('Eliminar función','Se eliminará «'+original.name+'» de este mando.',()=>{const slot=getButton(d,original.id);if(slot)slot.row.cells[slot.index]=null;});}}]:[]),
       {label:'Cancelar'},{label:'Guardar cambios',className:'primary',run:async()=>{
         draft.name=draft.name.trim();

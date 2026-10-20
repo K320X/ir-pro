@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {randomUUID} from 'node:crypto';
 import vm from 'node:vm';
-import {importModel,exportModel,reconcileCanonical,independentStateEffect} from '../custom_components/ir_pro/frontend/ir-pro-model.js';
+import {importModel,exportModel,reconcileCanonical,independentStateEffect,linkedActionEffect,actionStateField,controlledStateFields} from '../custom_components/ir_pro/frontend/ir-pro-model.js';
 
 const source=readFileSync(new URL('../custom_components/ir_pro/frontend/ir-pro-controller.js',import.meta.url),'utf8');
 const extract=name=>{
@@ -10,7 +10,7 @@ const extract=name=>{
   const next=/\n  (?:async )?function /g;next.lastIndex=start+1;const end=next.exec(source)?.index??source.length;
   assert.ok(start>=0&&end>start,name);return source.slice(start,end);
 };
-const context={uid:randomUUID,independentStateEffect,symbols:[{value:'fan'},{value:'swing'},{value:'snowflake'},{value:'sun'},{value:'droplet'}],clamp:(value,min,max,fallback)=>Number.isFinite(Number(value))?Math.min(max,Math.max(min,Math.round(Number(value)))):fallback};
+const context={uid:randomUUID,copy:structuredClone,independentStateEffect,linkedActionEffect,symbols:[{value:'fan'},{value:'swing'},{value:'snowflake'},{value:'sun'},{value:'droplet'}],clamp:(value,min,max,fallback)=>Number.isFinite(Number(value))?Math.min(max,Math.max(min,Math.round(Number(value)))):fallback};
 vm.createContext(context);
 vm.runInContext(source.slice(source.indexOf('  const modes ='),source.indexOf('  const symbols ='))+'\n'+source.slice(source.indexOf('  const button ='),source.indexOf('  const row =')),context);
 const run=code=>vm.runInContext(code,context);
@@ -56,7 +56,7 @@ const hydrated=imported.emitters[0].devices[0].rows[0].cells[0].independentActio
 assert.equal(hydrated.signals.press,true);assert.equal(hydrated.entity,fanAuto.entity);
 canonical.functions.find(fn=>fn.key===fanAuto.id).entity='button.renamed_by_home_assistant';reconcileCanonical(imported,wire);
 assert.equal(hydrated.entity,'button.renamed_by_home_assistant');
-for(const effect of [{power:true},{temperature:24},{fan:'high',swing:'auto'},{fan:'invalid'},{toString:'auto'},{constructor:'auto'},JSON.parse('{"__proto__":"auto"}'),null])assert.equal(independentStateEffect({state_effect:effect}),null);
+for(const effect of [{power:1},{temperature_delta:true},{temperature_delta:2},{swing_toggle:false},{temperature:24},{fan:'high',swing:'auto'},{fan:'invalid'},{toString:'auto'},{constructor:'auto'},JSON.parse('{"__proto__":"auto"}'),null])assert.equal(independentStateEffect({state_effect:effect}),null);
 context.emitterFor=()=>({name:'IR salón'});
 vm.runInContext(source.split('\n').find(line=>line.trimStart().startsWith('const entitySlug ='))+'\n'+source.split('\n').find(line=>line.trimStart().startsWith('const proposedEntitySuffix =')),context);
 context.device=device;
@@ -67,9 +67,10 @@ assert.equal(run("proposedEntitySuffix(device,{name:'Posición 1',state_effect:{
 // Execute the actual action path. An unknown option makes no request; a failed
 // press never changes the display. Success applies exactly one field while off.
 let calls=[],fail=false,renders=0,errors=0;
+const replyWithState=state=>{const response={model:structuredClone(wire),revision:10};response.model.emitters[0].devices[0].studio.state=structuredClone(state);return response;};
 let validatedDevices=0,validConfiguration=true;
-const runtime={independentStateEffect,independentSending:false,signalBusy:false,disposed:false,model:importModel(wire,device.id),confirmedWire:{},revision:0,catalog:[],modes:run('modes'),fans:run('fans'),swingStates:run('swingStates'),emitterFor:()=>({sourceId:'broadlink-source'}),copy:structuredClone,importModel,validateDevice(){validatedDevices++;return validConfiguration;},render(){renders++;},toast(){},api:{call:async(action,data)=>{calls.push([action,data]);if(fail)throw new Error('IR unavailable');return {};}},queuePhysical:async action=>{try{return await action();}catch{errors++;return false;}}};
-vm.createContext(runtime);vm.runInContext(extract('executeIndependent'),runtime);
+const runtime={independentStateEffect,independentSending:false,signalBusy:false,disposed:false,model:importModel(wire,device.id),confirmedWire:{},revision:0,catalog:[],modes:run('modes'),fans:run('fans'),swingStates:run('swingStates'),emitterFor:()=>({sourceId:'broadlink-source'}),copy:structuredClone,importModel,validateDevice(){validatedDevices++;return validConfiguration;},render(){renders++;},toast(){},api:{call:async(action,data)=>{calls.push([action,data]);if(fail)throw new Error('IR unavailable');return replyWithState({...runtime.d.state,fan:'auto'});}},queuePhysical:async action=>{try{return await action();}catch{errors++;return false;}}};
+vm.createContext(runtime);vm.runInContext(extract('adoptCommandEnvelope')+'\n'+extract('executeIndependent'),runtime);
 runtime.d=structuredClone(device);runtime.b=structuredClone(fanAuto);
 const before=structuredClone(runtime.d.state);runtime.b.signals.press=false;
 assert.equal(await vm.runInContext('executeIndependent(d,b)',runtime),false);assert.equal(calls.length,0);assert.deepEqual(runtime.d.state,before);
@@ -93,7 +94,7 @@ for(const action of [{type:'button',action:'set_fan',value:'high'},{type:'button
  runtime.next=action;assert.equal(await vm.runInContext('executeAction(d,next)',runtime),false);
 }
 assert.equal(snapshots,0);assert.deepEqual(runtime.d.state,before);
-releasePress({});assert.equal(await pendingPress,true);assert.equal(runtime.independentSending,false);assert.deepEqual(runtime.d.state,{...before,fan:'auto'});
+releasePress(replyWithState({...before,fan:'auto'}));assert.equal(await pendingPress,true);assert.equal(runtime.independentSending,false);assert.deepEqual(runtime.d.state,{...before,fan:'auto'});
 const afterSuccess=structuredClone(runtime.d.state),failedPress=vm.runInContext('executeIndependent(d,b)',runtime);
 assert.equal(runtime.independentSending,true);rejectPress(new Error('IR unavailable'));
 assert.equal(await failedPress,false);assert.equal(runtime.independentSending,false);assert.deepEqual(runtime.d.state,afterSuccess);assert.equal(snapshots,0);
@@ -110,7 +111,7 @@ const canonicalResponse=(state,removeAction=false)=>{
 };
 runtime.api.call=async()=>canonicalResponse(serverState);
 assert.equal(await vm.runInContext('executeIndependent(d,b)',runtime),true);
-assert.deepEqual(runtime.d.state,serverState);assert.equal(runtime.revision,20);assert.equal(runtime.model.selected,device.id);assert.equal(validatedDevices,1);
+assert.deepEqual(runtime.d.state,serverState);assert.equal(runtime.revision,20);assert.equal(runtime.model.selected,device.id);assert.equal(validatedDevices,3);
 assert.deepEqual(runtime.model.emitters[0].devices[0].state,serverState);assert.ok(runtime.model.emitters[0].devices[0].rows.some(row=>row.id==='row-from-another-client'));
 const stateAfterDeletion={power:false,mode:'dry',temperature:23,fan:'low',swing:'off'};
 runtime.api.call=async()=>canonicalResponse(stateAfterDeletion,true);
@@ -120,7 +121,7 @@ const current=runtime.model.emitters[0].devices[0];assert.equal(current.rows[0].
 assert.equal(exportModel(runtime.model).emitters[0].devices[0].functions.some(fn=>fn.key===fanAuto.id),false,'The next save cannot resurrect a concurrently deleted action');
 assert.ok(!JSON.stringify(exportModel(runtime.model)).includes('captured-fan-auto'));
 const canonicalBefore=JSON.stringify(runtime.confirmedWire);
-for(const invalid of [{model:null,revision:21},canonicalResponse({...serverState,fan:'invalid'}),{model:{version:2,emitters:[]},revision:21}]){
+for(const invalid of [{},{model:null,revision:21},canonicalResponse({...serverState,fan:'invalid'}),{model:{version:2,emitters:[]},revision:21}]){
  runtime.api.call=async()=>invalid;
  assert.equal(await vm.runInContext('executeIndependent(d,b)',runtime),false);assert.equal(runtime.independentSending,false);
  assert.deepEqual(runtime.d.state,stateAfterDeletion);assert.equal(JSON.stringify(runtime.confirmedWire),canonicalBefore);
@@ -155,3 +156,87 @@ assert.ok(sameActions.every(node=>!node.entity&&!folder.independentActions.some(
 assert.equal(sameActions.find(node=>node.state_effect.fan==='auto').signal_refs.press,'captured-fan-auto');
 assert.equal(JSON.stringify(device),originalDevice);
 console.log('Independent folders: stable option identities, hidden capacity/mode retention, canonical roundtrip, safe press effects and no opening side effects passed.');
+
+// Build the actual default remote: its dual labels describe the CURRENT state,
+// so the side labelled Apagado must learn Encender, never an off command.
+vm.runInContext(['symbols','actionOptions','actionValueChoices','defaultActionValue'].map(name=>source.split('\n').find(line=>line.trimStart().startsWith('const '+name+' ='))).join('\n')+'\n'+source.slice(source.indexOf('  const row ='),source.indexOf('  function validateDevice'))+'\nglobalThis.generic=newRemote("Genérico","wind","stateful");',context);
+context.control=context.generic.rows[1].cells[1];context.control.sendMode='independent';run('ensureIndependentActions(control)');
+const powerChildren=context.control.independentActions;
+assert.equal(context.control.actions[0].name,'Apagado');assert.equal(powerChildren[0].name,'Encender');assert.deepEqual(independentStateEffect(powerChildren[0]),{power:true});assert.equal(powerChildren[0].value,'power_on');assert.equal(powerChildren[1].name,'Apagar');
+const ready=node=>{for(const child of node.independentActions||[]){child.signal_refs={press:'capture-'+child.id};child.signals={press:true};child.entity='button.action_'+child.id.replaceAll('-','');}};
+ready(context.control);
+const genericModel={version:1,selected:context.generic.id,emitters:[{id:'generic-emitter',sourceId:'generic-source',name:'IR genérico',devices:[context.generic]}]};
+let genericCalls=[],genericRevision=1;
+const genericRuntime={model:genericModel,disposed:false,independentSending:false,signalBusy:false,revision:1,catalog:[],confirmedWire:{},copy:structuredClone,importModel,independentStateEffect,linkedActionEffect,actionStateField,controlledStateFields,modes:run('modes'),fans:run('fans'),swingStates:run('swingStates'),independentChoices:run('independentChoices'),independentActionFor:run('independentActionFor'),dualActions:run('dualActions'),dualStateIndex:run('dualStateIndex'),dualPowerLinked:run('dualPowerLinked'),emitterFor:()=>({sourceId:'generic-source'}),validateDevice:()=>true,render(){},toast(){},clearActionError(){},temperatureAvailable:()=>true,clamp:context.clamp,queuePhysical:async action=>action(),persist:async after=>after?.(),savedStateFor:()=>null};
+genericRuntime.api={call:async(action,data)=>{
+ genericCalls.push([action,data]);const next=exportModel(genericRuntime.model),target=next.emitters[0].devices[0],fn=target.functions.find(fn=>fn.key===data.function_key);assert.equal(action,'press');assert.ok(fn);
+ const effect=fn.state_effect;if(Object.hasOwn(effect,'temperature_delta'))target.studio.state.temperature=Math.min(30,Math.max(18,target.studio.state.temperature+effect.temperature_delta));else if(effect.swing_toggle)target.studio.state.swing=target.studio.state.swing==='auto'?'off':'auto';else Object.assign(target.studio.state,effect);
+ for(const row of target.studio.rows)for(const parent of row.cells||[])if(parent?.type==='dual'){const child=parent.independentActions?.find(child=>child.id===fn.key);if(child)parent.activeSide=1-child.action_index;}
+ for(const fn of target.functions)fn.signals=Object.fromEntries(Object.keys(fn.signal_refs||{}).map(key=>[key,true]));
+ return {model:next,revision:++genericRevision};
+}};
+vm.createContext(genericRuntime);vm.runInContext(extract('adoptCommandEnvelope')+'\n'+extract('executeIndependent')+'\n'+extract('executeAction')+'\n'+extract('commitState'),genericRuntime);
+const pressDual=async()=>{genericRuntime.d=genericRuntime.model.emitters[0].devices[0];genericRuntime.b=genericRuntime.d.rows[1].cells[1];return vm.runInContext('executeAction(d,b)',genericRuntime);};
+assert.equal(await pressDual(),true);assert.equal(genericRuntime.model.emitters[0].devices[0].state.power,true);assert.equal(genericCalls[0][1].function_key,powerChildren[0].id);
+assert.equal(await pressDual(),true);assert.equal(genericRuntime.model.emitters[0].devices[0].state.power,false);assert.equal(genericCalls[1][1].function_key,powerChildren[1].id);
+
+// A non-power dual relies on the phase in the canonical response, not on a
+// detached pre-import object. Two presses must use distinct up/down captures.
+const active=genericRuntime.model.emitters[0].devices[0],tempDual=active.rows[1].cells[1];tempDual.actions=[{name:'Subir',icon:'plus',color:'#56c4ed',showName:true,action:'temp_up'},{name:'Bajar',icon:'minus',color:'#56c4ed',showName:true,action:'temp_down'}];tempDual.activeSide=0;
+context.control=tempDual;run('ensureIndependentActions(control)');ready(tempDual);const up=run("independentActionFor(control,'temp_up',0)"),down=run("independentActionFor(control,'temp_down',1)");active.state.temperature=24;
+assert.equal(await pressDual(),true);assert.equal(genericRuntime.model.emitters[0].devices[0].state.temperature,25);assert.equal(genericRuntime.model.emitters[0].devices[0].rows[1].cells[1].activeSide,1);assert.equal(genericCalls.at(-1)[1].function_key,up.id);
+assert.equal(await pressDual(),true);assert.equal(genericRuntime.model.emitters[0].devices[0].state.temperature,24);assert.equal(genericCalls.at(-1)[1].function_key,down.id);
+
+// One independent temperature control excludes the whole temperature field.
+// Its settings sibling may prepare the number, but cannot send another preset.
+const mixed=genericRuntime.model.emitters[0].devices[0];mixed.rows[1].cells[1].sendMode='settings';mixed.state.power=true;const tempUp=mixed.rows[2].cells[2],tempDown=mixed.rows[2].cells[0];tempUp.sendMode='independent';context.control=tempUp;run('ensureIndependentActions(control)');ready(tempUp);
+const sendsBefore=genericCalls.length;genericRuntime.d=mixed;genericRuntime.b=tempDown;
+assert.equal(await vm.runInContext('executeAction(d,b)',genericRuntime),true);assert.equal(mixed.state.temperature,23);assert.equal(genericCalls.length,sendsBefore);assert.ok(!controlledStateFields(mixed).includes('temperature'));
+assert.match(source,/Si algún control de este ajuste es independiente, el ajuste queda fuera del estado general/);
+const powerIndependent=structuredClone(context.generic);powerIndependent.state.power=false;powerIndependent.state.temperature=24;genericRuntime.d=powerIndependent;genericRuntime.b=powerIndependent.rows[2].cells[2];genericRuntime.savedStateFor=()=>({signal:{kind:'learned',id:'aggregate'}});let offAggregate;
+genericRuntime.api.call=async(action,data)=>{offAggregate=[action,data];return {revision:++genericRevision,model:exportModel({version:1,emitters:[{id:'generic-emitter',sourceId:'generic-source',name:'IR genérico',devices:[powerIndependent]}]})};};
+assert.equal(await vm.runInContext('executeAction(d,b)',genericRuntime),true);assert.equal(offAggregate[0],'send_state');assert.equal(offAggregate[1].state.power,false);assert.equal(offAggregate[1].state.temperature,25);assert.ok(!offAggregate[1].controlled_fields.includes('power'));
+console.log('Generic independent buttons: real default power intent, canonical non-power dual phases and mixed-temperature no-send policy passed.');
+
+// Aggregate sends use exactly the same canonical adoption and interaction lock.
+// A concurrent swing change and deletion must survive the next local save.
+const aggregateWire=structuredClone(wire),aggregateDevice=aggregateWire.emitters[0].devices[0];
+aggregateDevice.studio.rows[0].cells[0].group='swing';aggregateDevice.studio.rows[0].cells[0].sendMode='independent';aggregateDevice.studio.state={power:true,mode:'cool',temperature:24,fan:'high',swing:'position_1'};
+const aggregateReply={revision:30,model:structuredClone(aggregateWire)},aggregateTarget=aggregateReply.model.emitters[0].devices[0];
+aggregateTarget.studio.state.swing='position_6';aggregateTarget.functions=aggregateTarget.functions.filter(fn=>fn.key!==fanAuto.id);aggregateTarget.studio.rows[0].cells[0].independentActions=aggregateTarget.studio.rows[0].cells[0].independentActions.filter(node=>node.id!==fanAuto.id);aggregateTarget.studio.rows.push({id:'concurrent-row',type:'display',width:3,height:2,fields:{temperature:true}});for(const row of aggregateTarget.layout.rows)row.cells=row.cells.map(key=>key===fanAuto.id?null:key);
+let resolveAggregate,aggregateError,aggregateCall;
+const aggregateRuntime={independentSending:false,disposed:false,catalog:[],revision:20,confirmedWire:structuredClone(aggregateWire),model:importModel(aggregateWire,aggregateDevice.id),controlledStateFields,importModel,copy:structuredClone,modes:run('modes'),fans:run('fans'),swingStates:run('swingStates'),emitterFor:()=>({sourceId:'broadlink-source'}),validateDevice:()=>true,render(){},toast(){},clearActionError(){},savedStateFor:()=>({signal:{kind:'learned',id:'aggregate'}}),persist:async after=>{try{return await after();}catch(error){aggregateError=error;return false;}},api:{call:async(action,data)=>{aggregateCall=[action,data];return new Promise(resolve=>{resolveAggregate=resolve;});}}};
+vm.createContext(aggregateRuntime);vm.runInContext(extract('adoptCommandEnvelope')+'\n'+extract('commitState')+'\n'+extract('executeAction'),aggregateRuntime);aggregateRuntime.d=aggregateRuntime.model.emitters[0].devices[0];
+const aggregatePending=vm.runInContext('commitState(d,"Enviar",true)',aggregateRuntime);assert.equal(aggregateRuntime.independentSending,true);assert.equal(aggregateCall[0],'send_state');assert.deepEqual(Array.from(aggregateCall[1].controlled_fields),['power','mode','temperature','fan']);
+const beforePending=JSON.stringify(aggregateRuntime.model);aggregateRuntime.b={type:'button',action:'temp_up'};assert.equal(await vm.runInContext('executeAction(d,b)',aggregateRuntime),false);assert.equal(JSON.stringify(aggregateRuntime.model),beforePending);
+resolveAggregate(aggregateReply);assert.equal(await aggregatePending,true);assert.equal(aggregateRuntime.independentSending,false);const afterAggregate=aggregateRuntime.model.emitters[0].devices[0];assert.equal(afterAggregate.state.swing,'position_6');assert.equal(aggregateRuntime.d.state.swing,'position_6');assert.ok(afterAggregate.rows.some(row=>row.id==='concurrent-row'));assert.ok(!exportModel(aggregateRuntime.model).emitters[0].devices[0].functions.some(fn=>fn.key===fanAuto.id));
+const safeModel=aggregateRuntime.model,safeWire=JSON.stringify(aggregateRuntime.confirmedWire),safeState=structuredClone(aggregateRuntime.d.state);aggregateRuntime.api.call=async()=>({model:null,revision:31});assert.equal(await vm.runInContext('commitState(d,"Enviar",true)',aggregateRuntime),false);assert.equal(aggregateRuntime.independentSending,false);assert.equal(aggregateRuntime.model,safeModel);assert.equal(JSON.stringify(aggregateRuntime.confirmedWire),safeWire);assert.deepEqual(aggregateRuntime.d.state,safeState);assert.ok(aggregateError);
+console.log('Aggregate sends preserve canonical concurrent state/topology, lock pending edits and reject invalid responses without adoption.');
+
+// A settings dual must advance the CURRENT model after an aggregate response
+// replaces all local objects. It cannot revive a deleted/reconfigured control.
+const settingsFixture=()=>{
+ const target=structuredClone(context.generic),dual=target.rows[1].cells[1];
+ target.state={power:true,mode:'cool',temperature:24,fan:'high',swing:'off'};target.savedStates=[];
+ dual.sendMode='settings';dual.activeSide=0;dual.independentActions=[];dual.actions=[{name:'Subir',icon:'plus',color:'#56c4ed',showName:true,action:'temp_up'},{name:'Bajar',icon:'minus',color:'#56c4ed',showName:true,action:'temp_down'}];
+ return {version:1,selected:target.id,emitters:[{id:'settings-emitter',sourceId:'settings-source',name:'IR ajustes',devices:[target]}]};
+};
+let responseChange='keep',phaseSaves=[],settingsRequests=0;
+const settingsRuntime={model:settingsFixture(),independentSending:false,disposed:false,catalog:[],revision:0,confirmedWire:{},signalBusy:false,controlledStateFields,actionStateField,linkedActionEffect,independentStateEffect,importModel,copy:structuredClone,modes:run('modes'),fans:run('fans'),swingStates:run('swingStates'),dualActions:run('dualActions'),dualStateIndex:run('dualStateIndex'),dualPowerLinked:run('dualPowerLinked'),emitterFor:()=>({sourceId:'settings-source'}),validateDevice:()=>true,temperatureAvailable:()=>true,clamp:context.clamp,render(){},toast(){},clearActionError(){},savedStateFor:()=>({signal:{kind:'learned',id:'full'}}),persist:async after=>{if(after)return after();phaseSaves.push(settingsRuntime.model.emitters[0].devices[0].rows[1].cells[1]?.activeSide);return true;},api:{call:async(action,data)=>{
+ settingsRequests++;assert.equal(action,'send_state');const next=exportModel(settingsRuntime.model),target=next.emitters[0].devices[0],dual=target.studio.rows[1].cells[1];target.studio.state=structuredClone(data.state);
+ if(responseChange==='delete')target.studio.rows[1].cells[1]=null;
+ if(responseChange==='replace')target.studio.rows[1].cells[1]={...dual,type:'button',action:'temp_up'};
+ if(responseChange==='actions')dual.actions[1].action='set_mode';
+ if(responseChange==='phase')dual.activeSide=1;
+ return {revision:++genericRevision,model:next};
+}}};
+vm.createContext(settingsRuntime);vm.runInContext(['adoptCommandEnvelope','commitState','executeAction'].map(extract).join('\n'),settingsRuntime);
+const pressSettingsDual=async()=>{settingsRuntime.d=settingsRuntime.model.emitters[0].devices[0];settingsRuntime.b=settingsRuntime.d.rows[1].cells[1];return vm.runInContext('executeAction(d,b)',settingsRuntime);};
+const detachedDual=settingsRuntime.model.emitters[0].devices[0].rows[1].cells[1];assert.equal(await pressSettingsDual(),true);assert.equal(detachedDual.activeSide,0);assert.equal(settingsRuntime.model.emitters[0].devices[0].rows[1].cells[1].activeSide,1);assert.deepEqual(phaseSaves,[1]);
+assert.equal(await pressSettingsDual(),true);assert.equal(settingsRuntime.model.emitters[0].devices[0].rows[1].cells[1].activeSide,0);assert.deepEqual(phaseSaves,[1,0]);assert.equal(settingsRuntime.model.emitters[0].devices[0].state.temperature,24);
+for(const change of ['delete','replace','actions','phase']){
+ settingsRuntime.model=settingsFixture();phaseSaves=[];responseChange=change;assert.equal(await pressSettingsDual(),true);assert.equal(phaseSaves.length,0);
+ const current=settingsRuntime.model.emitters[0].devices[0].rows[1].cells[1];if(change==='delete')assert.equal(current,null);if(change==='replace')assert.equal(current.type,'button');if(change==='phase')assert.equal(current.activeSide,1);
+}
+assert.equal(settingsRequests,6);
+console.log('Settings dual phases advance only the current matching control after canonical adoption; deleted/replaced/reconfigured nodes remain authoritative.');
