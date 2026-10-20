@@ -13,6 +13,12 @@ ICON_MAP = {
     "timer": "timer-outline", "timer-off": "timer-off-outline",
     "thermometer": "thermometer", "wind": "weather-windy",
     "zap": "lightning-bolt", "leaf": "leaf", "moon": "weather-night",
+    "remote": "remote", "power-off": "power-off", "plus": "plus",
+    "minus": "minus", "droplet": "water", "swing": "air-filter",
+    "swing-off": "air-filter", "folder": "folder", "light": "lightbulb",
+    "auto": "alpha-a", "home": "home-thermometer", "copy": "content-copy",
+    **{f"swing-position-{number}": "air-filter" for number in range(1, 7)},
+    **{f"fan-speed-{number}": "fan" for number in range(1, 6)},
 }
 
 

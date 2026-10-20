@@ -14,6 +14,7 @@ class WebSocketTests(unittest.IsolatedAsyncioTestCase):
     def setUpClass(cls):
         probatio = ModuleType("probatio")
         probatio.Required = lambda name: name
+        probatio.Optional = lambda name: name
         probatio.In = lambda values: values
         with fake_ha_modules():
             api = ModuleType("homeassistant.components.websocket_api")
@@ -31,6 +32,8 @@ class WebSocketTests(unittest.IsolatedAsyncioTestCase):
             async_test_signal=AsyncMock(return_value={"status": "sent_unconfirmed"}),
             async_confirm_signal=AsyncMock(return_value={"verified": True}),
             async_press=AsyncMock(return_value={"status": "sent_unconfirmed"}),
+            async_send_state=AsyncMock(return_value={"status": "sent_unconfirmed"}),
+            async_add_listener=Mock(return_value=Mock()),
         )
         self.hass = SimpleNamespace(data={"ir_pro": {"manager": self.manager}})
 
@@ -38,7 +41,7 @@ class WebSocketTests(unittest.IsolatedAsyncioTestCase):
     def connection(*, authenticated=True, admin=False):
         return SimpleNamespace(
             user=SimpleNamespace(is_admin=admin) if authenticated else None,
-            send_error=Mock(), send_result=Mock(),
+            send_error=Mock(), send_result=Mock(), send_event=Mock(), subscriptions={},
         )
 
     def commands(self):
@@ -48,6 +51,7 @@ class WebSocketTests(unittest.IsolatedAsyncioTestCase):
             (self.websocket.ws_test_signal, {"signal_ref": "reference"}, "async_test_signal"),
             (self.websocket.ws_confirm_signal, {"signal_ref": "reference"}, "async_confirm_signal"),
             (self.websocket.ws_press, {"function_key": "function"}, "async_press"),
+            (self.websocket.ws_send_state, {"device_id": "device", "state": {"power": False}}, "async_send_state"),
         ]
 
     async def test_no_operation_is_available_without_authenticated_user(self):
@@ -96,6 +100,30 @@ class WebSocketTests(unittest.IsolatedAsyncioTestCase):
         self.manager.async_test_signal.assert_not_awaited()
         self.manager.async_confirm_signal.assert_not_awaited()
         self.manager.async_press.assert_not_awaited()
+
+    async def test_explicit_double_action_passes_desired_state(self):
+        connection = self.connection(admin=True)
+        await self.websocket.ws_press(self.hass, connection, {"id": 12, "function_key": "function", "on": False})
+        self.manager.async_press.assert_awaited_once_with("function", desired=False)
+
+    async def test_authenticated_subscription_only_reads_and_can_unsubscribe(self):
+        connection = self.connection()
+        await self.websocket.ws_subscribe(self.hass, connection, {"id": 13})
+        self.manager.async_add_listener.assert_called_once()
+        connection.send_result.assert_called_once_with(13, {"subscribed": True})
+        listener = self.manager.async_add_listener.call_args.args[0]
+        listener()
+        connection.send_event.assert_called_once_with(13, {"revision": 1})
+        connection.subscriptions[13]()
+        self.manager.async_add_listener.return_value.assert_called_once()
+        self.manager.async_press.assert_not_awaited()
+        self.manager.async_send_state.assert_not_awaited()
+
+    async def test_anonymous_cannot_subscribe(self):
+        connection = self.connection(authenticated=False)
+        await self.websocket.ws_subscribe(self.hass, connection, {"id": 13})
+        self.manager.async_add_listener.assert_not_called()
+        connection.send_error.assert_called_once()
 
     async def test_not_loaded_has_explicit_error_and_does_not_call_manager(self):
         connection = self.connection(admin=True)

@@ -6,13 +6,15 @@ from typing import Any
 from uuid import NAMESPACE_URL, uuid5
 
 from .errors import IRProError
+from .studio import STUDIO_ICONS, validate_studio
 
 ICONS = {
     "droplets", "power", "snowflake", "fan", "volume-2", "sun", "lightbulb",
     "chevron-up", "chevron-down", "move-vertical", "move-horizontal", "settings",
     "timer", "timer-off", "thermometer", "wind", "zap", "leaf", "moon", "none",
 }
-DEVICE_ICONS = {"air-vent", "tv", "fan", "remote"}
+ICONS |= STUDIO_ICONS
+DEVICE_ICONS = {"air-vent", "tv", "fan", "remote", "wind", "light"}
 IDENTIFIER = re.compile(r"^[a-zA-Z0-9_-]{1,128}$")
 ENTITY = re.compile(r"^(button|switch)\.[a-z0-9_]{1,240}$")
 COLOR = re.compile(r"^#[a-fA-F0-9]{6}$")
@@ -200,7 +202,7 @@ def validate_model(
                     refs, signals = {}, {}
                     notices.append("El mando se ha copiado a otro emisor. Aprende de nuevo sus señales.")
                 function = {
-                    "key": key, "name": _text(raw_function.get("name"), "El nombre de la función"),
+                    "key": key, "name": _text(raw_function.get("name"), "El nombre de la función", 120),
                     "showName": function_icon == "none" or raw_function.get("showName", True),
                     "icon": function_icon, "color": color, "type": kind, "entity": entity,
                     "signals": signals, "signal_refs": refs,
@@ -208,6 +210,12 @@ def validate_model(
                 }
                 device["functions"].append(function)
             device["layout"] = _layout(raw_device.get("layout"), [f["key"] for f in device["functions"]], device_id)
+            previous_studio = old_devices.get(device_id, (None, {}))[1].get("studio")
+            if "studio" in raw_device:
+                device["studio"] = validate_studio(raw_device["studio"], device["functions"], ICONS, previous_studio)
+            elif previous_studio is not None:
+                # Older clients must not silently erase the visual editor.
+                device["studio"] = validate_studio(previous_studio, device["functions"], ICONS, previous_studio)
             emitter["devices"].append(device)
         emitters.append(emitter)
     if sum(len(d["functions"]) for e in emitters for d in e["devices"]) > 1500:

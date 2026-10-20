@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.2.0b1
+
+- Add remotes with adjustable settings, configurable displays, folders and dual-action buttons.
+- Learn complete air-conditioner states and expose each learned state as a real button entity, with one independent off state.
+- Configure two to five fan speeds with optional automatic mode, and up to six fixed swing positions with automatic and disabled options.
+- Show available room temperature and humidity sensors associated with the transmitter.
+- Keep learned-signal testing optional, with an animated listening indicator and a clear capture result.
+- Restore icon previews, improve remote layout editing and compact the state/entity table with copy actions.
+- Preserve existing remotes, learned references and entity identifiers when upgrading from the first beta.
+
 ## 0.1.0b3
 
 - Keep source state and registry event callbacks on Home Assistant's event loop, fixing entity update errors after startup.

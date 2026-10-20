@@ -38,6 +38,17 @@ async def ws_get(hass, connection, msg):
     await _run(hass, connection, msg, get, admin=False)
 
 
+@websocket_api.websocket_command({"type": "ir_pro/subscribe"})
+@websocket_api.async_response
+async def ws_subscribe(hass, connection, msg):
+    async def subscribe(manager):
+        connection.subscriptions[msg["id"]] = manager.async_add_listener(
+            lambda: connection.send_event(msg["id"], manager.envelope())
+        )
+        return {"subscribed": True}
+    await _run(hass, connection, msg, subscribe, admin=False)
+
+
 @websocket_api.websocket_command({
     "type": "ir_pro/save", probatio.Required("model"): dict,
     probatio.Required("expected_revision"): int,
@@ -75,12 +86,22 @@ async def ws_confirm_signal(hass, connection, msg):
 
 @websocket_api.websocket_command({
     "type": "ir_pro/press", probatio.Required("function_key"): str,
+    probatio.Optional("on"): bool,
 })
 @websocket_api.async_response
 async def ws_press(hass, connection, msg):
-    await _run(hass, connection, msg, lambda m: m.async_press(msg["function_key"]))
+    await _run(hass, connection, msg, lambda m: m.async_press(msg["function_key"], desired=msg.get("on")))
+
+
+@websocket_api.websocket_command({
+    "type": "ir_pro/send_state", probatio.Required("device_id"): str,
+    probatio.Required("state"): dict,
+})
+@websocket_api.async_response
+async def ws_send_state(hass, connection, msg):
+    await _run(hass, connection, msg, lambda m: m.async_send_state(msg["device_id"], msg["state"]))
 
 
 def async_register(hass) -> None:
-    for command in (ws_get, ws_save, ws_learn, ws_test_signal, ws_confirm_signal, ws_press):
+    for command in (ws_get, ws_subscribe, ws_save, ws_learn, ws_test_signal, ws_confirm_signal, ws_press, ws_send_state):
         websocket_api.async_register_command(hass, command)

@@ -4,6 +4,7 @@ import asyncio
 from contextlib import asynccontextmanager
 from copy import deepcopy
 import logging
+import math
 import time
 from typing import Any, Callable
 from uuid import UUID, uuid4
@@ -16,6 +17,7 @@ from homeassistant.helpers.storage import Store
 from .const import DOMAIN, EMPTY_MODEL, LEARN_TIMEOUT, STORAGE_KEY, STORAGE_VERSION, VERSION
 from .errors import IRProError
 from .validation import signal_is_learned, validate_model
+from .studio import configuration_key, sync_studio, validate_configuration
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -60,8 +62,38 @@ class IRProManager:
                 "model": (device.model if device else None) or "Broadlink",
                 "available": bool(state and state.state == STATE_ON and not source.disabled_by),
                 "canLearn": bool(state and int(state.attributes.get("supported_features", 0)) & 1),
+                "ambient": self._ambient_readings(source.device_id),
             })
         return sorted(result, key=lambda item: (item["name"].casefold(), item["id"]))
+
+    def _ambient_readings(self, device_id: str | None) -> dict:
+        """Use public HA sensor states belonging to this Broadlink hardware."""
+        if not device_id:
+            return {}
+        result = {}
+        for entity in sorted(self.registry.entities.values(), key=lambda item: item.entity_id):
+            if entity.platform != "broadlink" or entity.device_id != device_id or entity.disabled_by or not entity.entity_id.startswith("sensor."):
+                continue
+            state = self.hass.states.get(entity.entity_id)
+            if not state or not isinstance(state.state, (str, int, float)) or isinstance(state.state, bool):
+                continue
+            try:
+                value = float(state.state)
+            except (TypeError, ValueError):
+                continue
+            if not math.isfinite(value):
+                continue
+            kind = state.attributes.get("device_class")
+            unit = state.attributes.get("unit_of_measurement")
+            if kind == "temperature" and unit in ("°C", "C", "℃", "°F", "F"):
+                unit = "°F" if unit in ("°F", "F") else "°C"
+            elif kind == "humidity" and unit == "%" and 0 <= value <= 100:
+                pass
+            else:
+                continue
+            if kind not in result:
+                result[kind] = {"entity_id": entity.entity_id, "state": value, "unit": unit}
+        return result
 
     def _refresh_entity_ids(self) -> None:
         """Respect renames made in HA's entity registry."""
@@ -81,6 +113,8 @@ class IRProManager:
                         signal: self._learned_reference(function, emitter["sourceId"], signal)
                         for signal in function["signal_refs"]
                     }
+                if "studio" in device:
+                    sync_studio(device["studio"], device["functions"])
         response = {
             "model": deepcopy(self.model), "revision": self.revision,
             "catalog": self.catalog(), "version": VERSION,
@@ -186,7 +220,11 @@ class IRProManager:
             if event.event_type == EVENT_STATE_CHANGED:
                 entity_id = event.data.get("entity_id", "")
                 if not entity_id.startswith("remote."):
-                    return
+                    sensor = self.registry.async_get(entity_id)
+                    if not sensor or sensor.platform != "broadlink" or not entity_id.startswith("sensor.") or not sensor.device_id:
+                        return
+                    if not any(source.platform == "broadlink" and source.entity_id.startswith("remote.") and source.device_id == sensor.device_id for source in self.registry.entities.values()):
+                        return
             self._notify()
         self._unsubs.append(self.hass.bus.async_listen(EVENT_STATE_CHANGED, changed))
         self._unsubs.append(self.hass.bus.async_listen("entity_registry_updated", changed))
@@ -342,7 +380,24 @@ class IRProManager:
             self._notify()
             return {"verified": True}
 
-    async def async_press(self, function_key: str, desired: bool | None = None) -> dict:
+    async def async_send_state(self, device_id: str, state: dict) -> dict:
+        """Only an explicitly learned exact configuration can be transmitted."""
+        normalized = validate_configuration(state)
+        _, device = self._find_device(device_id)
+        studio = device.get("studio")
+        if not studio or studio["type"] != "stateful":
+            raise IRProError("invalid_model", "Este dispositivo no es un mando con ajustes.")
+        key = configuration_key(normalized)
+        matches = [item for item in studio["savedStates"] if configuration_key(item["settings"]) == key]
+        record = next((item for item in matches if self.function_available(item["id"])), matches[0] if matches else None)
+        if not record:
+            raise IRProError("invalid_signal", "Este estado no tiene una señal aprendida. Aprende primero este estado del mando original.")
+        result = await self.async_press(record["id"], _expected_state=key)
+        return {**result, **self.envelope()}
+
+    async def async_press(self, function_key: str, desired: bool | None = None, *, _expected_state: tuple | None = None) -> dict:
+        if desired is not None and type(desired) is not bool:
+            raise IRProError("invalid_model", "El estado del botón de doble acción no es válido.")
         found = self.find_function(function_key)
         if not found or not self.function_available(function_key):
             raise IRProError("invalid_signal", "La función no está disponible o necesita aprender sus señales.")
@@ -352,22 +407,34 @@ class IRProManager:
             found = self.find_function(function_key)
             if not found or not self.function_available(function_key):
                 raise IRProError("invalid_signal", "La función ya no está disponible.")
-            emitter, _, function = found
+            emitter, device, function = found
+            state_record = next((item for item in device.get("studio", {}).get("savedStates", []) if item["id"] == function_key), None)
+            if _expected_state is not None and (not state_record or configuration_key(state_record["settings"]) != _expected_state):
+                raise IRProError("invalid_signal", "El estado guardado ha cambiado. Recarga el mando antes de enviarlo.")
             next_state = (not function.get("on")) if desired is None else desired
             signal = "press" if function["type"] == "button" else ("on" if next_state else "off")
             record = self._record(function["signal_refs"][signal])
+            sent_settings = deepcopy(state_record["settings"]) if state_record else None
+            sent_device_id, sent_source_id = device["id"], emitter["sourceId"]
             await self._remote_call(emitter["sourceId"], "send_command", record)
             async with self._lock:
                 current = self.find_function(function_key)
-                if current and current[2]["type"] == "switch":
+                if current and (current[2]["type"] == "switch" or state_record):
                     model = deepcopy(self.model)
+                    state_updated = False
                     for e in model["emitters"]:
                         for d in e["devices"]:
                             for f in d["functions"]:
                                 if f["key"] == function_key:
-                                    f["on"] = bool(next_state)
-                    await self._write(model, self.signals, self.revision)
-                    self.model = model
+                                    if f["type"] == "switch":
+                                        f["on"] = bool(next_state)
+                            current_record = next((item for item in d.get("studio", {}).get("savedStates", []) if item["id"] == function_key), None)
+                            if current_record and sent_settings is not None and d["id"] == sent_device_id and e["sourceId"] == sent_source_id and configuration_key(current_record["settings"]) == configuration_key(sent_settings):
+                                d["studio"]["state"].update(sent_settings)
+                                state_updated = True
+                    revision = self.revision + 1 if state_updated else self.revision
+                    await self._write(model, self.signals, revision)
+                    self.model, self.revision = model, revision
                 self._notify()
             return {"status": "sent_unconfirmed", "on": bool(next_state) if function["type"] == "switch" else None}
 
@@ -392,9 +459,7 @@ class IRProManager:
                 self.registry.async_remove(entity.entity_id)
         device_registry = dr.async_get(self.hass)
         wanted_devices = {d["id"] for e in self.model["emitters"] for d in e["devices"]}
-        for device in list(device_registry.devices):
-            if device.config_entry_id != self.entry.entry_id:
-                continue
+        for device in list(dr.async_entries_for_config_entry(device_registry, self.entry.entry_id)):
             ours = [identifier for domain, identifier in device.identifiers if domain == DOMAIN]
             if ours and not any(identity in wanted_devices for identity in ours):
                 if not any(entity.device_id == device.id and entity.platform != DOMAIN for entity in self.registry.entities.values()):
