@@ -80,6 +80,12 @@ assert.equal(vm.runInContext("displayAccent('#f4f6f8')",context),'#f4f6f8');
 assert.equal(vm.runInContext("displayAccent('#c6b5ff')",context),'#c6b5ff');
 assert.match(source,/draft\.accent=displayAccent\(draft\.accent\)/,'Editing must show the same resolved color in its picker and preview');
 
+const captureContext={viewedSavedStateId:null,savedStateFor:()=>null,configurationKey:JSON.stringify,configurationLabel:()=> 'Apagado',esc:String,glyph:()=>'',stateTable:()=>'',d:{state:{power:false},savedStates:[]}};
+vm.createContext(captureContext);vm.runInContext(extract('stateCapturePanel'),captureContext);
+const captureHTML=vm.runInContext('stateCapturePanel(d)',captureContext);
+assert.match(captureHTML,/data-learn-state>Aprender estado<\/button>/);
+assert.ok(!captureHTML.includes('Aprender este estado del mando original'));
+
 // Unknown combinations prepare the UI without a request. An unexpected backend
 // invalid_signal for an apparently learned state must remain a real inline error.
 let sends=0,learned=false,sendFailure=null;

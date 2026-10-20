@@ -1,8 +1,16 @@
 // The server owns entities and learned signal references. Studio rows are UI metadata.
 const clone=value=>structuredClone(value);
+// Independent actions describe one confirmed change, never a complete state.
+export function independentStateEffect(node) {
+  const effect=node?.state_effect;
+  if(!effect||typeof effect!=='object'||Array.isArray(effect)||Object.keys(effect).length!==1)return null;
+  const [key]=Object.keys(effect),value=effect[key];
+  const allowed={mode:['cool','heat','dry','fan','auto'],fan:['auto','low','medium','high','speed_4','speed_5'],swing:['off','auto',...Array.from({length:6},(_,index)=>'position_'+(index+1))]};
+  return Object.hasOwn(allowed,key)&&allowed[key].includes(value)?{[key]:value}:null;
+}
 const nodes=device=>{
   const result=[];
-  const visit=node=>{if(!node)return;result.push(node);if(node.type==='group'&&node.group==='custom')(node.children||[]).forEach(visit);};
+  const visit=node=>{if(!node)return;result.push(node);if(node.type==='group'&&node.group==='custom')(node.children||[]).forEach(visit);(node.independentActions||[]).forEach(visit);};
   (device.rows||[]).filter(row=>row.type==='buttons').forEach(row=>(row.cells||[]).forEach(visit));
   return result;
 };
@@ -30,6 +38,7 @@ export function importModel(wire,selected='') {
       for(const node of nodes(result)) {
         const fn=canonical.get(node.id);if(!fn)continue;
         node.entity=fn.entity;node.signal_refs=clone(fn.signal_refs||{});node.signals=clone(fn.signals||{});node.on=fn.on;node._existingType=fn.type;
+        if(independentStateEffect(fn))node.state_effect=clone(fn.state_effect);
         if(node.type==='dual'){node.activeSide=fn.on===true?1:0;node.actions?.forEach((side,index)=>{side.signal=node.signal_refs[index===0?'on':'off']?{kind:'learned',id:node.signal_refs[index===0?'on':'off']}:null;});}
       }
       for(const record of result.savedStates){const fn=canonical.get(record.id);record.entity=fn?.entity||record.entity;record.signal_refs=clone(fn?.signal_refs||{});record.signal=fn?.signals?.press&&record.signal_refs.press?{kind:'learned',id:record.signal_refs.press}:null;}
@@ -46,7 +55,8 @@ export function exportModel(model) {
     const add=(node,type,refs)=>{
       if(seen.has(node.id))return;seen.add(node.id);
       const old=previous.get(node.id);
-      functions.push({key:node.id,name:node.name,showName:node.showName!==false,icon:node.icon||'remote',color:node.color||'#56c4ed',type:old?.type||type,entity:old?.entity||node.entity,signals:{},signal_refs:clone(refs||{}),on:old?.on??null});
+      const effect=independentStateEffect(node)||independentStateEffect(old);
+      functions.push({key:node.id,name:node.name,showName:node.showName!==false,icon:node.icon||'remote',color:node.color||'#56c4ed',type:old?.type||type,entity:old?.entity||node.entity,signals:{},signal_refs:clone(refs||{}),on:old?.on??null,...(effect?{state_effect:effect}:{})});
     };
     for(const node of nodes(device)) {
       if(node.type==='button'&&(device.type==='simple'||node.action==='learned'))add(node,'button',node.signal_refs||{});
@@ -70,6 +80,7 @@ export function reconcileCanonical(model,wire,requested) {
     target._functions=clone(device.functions||[]);
     const canonical=new Map(target._functions.map(fn=>[fn.key,fn]));
     for(const node of nodes(target)){const fn=canonical.get(node.id);if(fn){node.entity=fn.entity;node._existingType=fn.type;node.on=fn.on;
+      if(independentStateEffect(fn))node.state_effect=clone(fn.state_effect);
       if(!expected||JSON.stringify(node.signal_refs||{})===JSON.stringify(expected.get(node.id)?.signal_refs||{})){node.signal_refs=clone(fn.signal_refs||{});node.signals=clone(fn.signals||{});}
       if(node.type==='dual'&&target.type==='simple')node.activeSide=fn.on===true?1:0;
     }}

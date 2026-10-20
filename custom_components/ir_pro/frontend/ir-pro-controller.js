@@ -1,9 +1,9 @@
 import {icon} from './ir-pro-icons.js?v=0.2.0b5';
-import {importModel,exportModel,reconcileCanonical} from './ir-pro-model.js?v=0.2.0b5';
+import {importModel,exportModel,reconcileCanonical,independentStateEffect} from './ir-pro-model.js?v=0.2.0b5';
 import {mountIconPickers} from './ir-pro-pickers.js?v=0.2.0b5';
 export function mountStudio(root,api,initial,isAdmin,openMenu) {
   const scope=root.getRootNode(),lifecycle=new AbortController();
-  let disposed=false,catalog=initial.catalog||[],revision=initial.revision||0,saveQueue=Promise.resolve(true),saveFailed=false,actionError='',signalBusy=false,operation=0,pendingSaves=0,unsubscribe=null,lastAmbientSnapshot='',deferredEnvelope=null,scrollGeneration=0,inputGeneration=0,lastRenderedRoute='';
+  let disposed=false,catalog=initial.catalog||[],revision=initial.revision||0,saveQueue=Promise.resolve(true),saveFailed=false,actionError='',signalBusy=false,independentSending=false,operation=0,pendingSaves=0,unsubscribe=null,lastAmbientSnapshot='',deferredEnvelope=null,scrollGeneration=0,inputGeneration=0,lastRenderedRoute='';
 
   'use strict';
   const app = scope.querySelector('#app');
@@ -39,7 +39,23 @@ export function mountStudio(root,api,initial,isAdmin,openMenu) {
   const actionValueLabel = action => action==='set_mode'?'Modo':action==='set_fan'?'Velocidad':'Posición u oscilación';
   const defaultActionValue = action => action==='set_mode'?'cool':['set_fan','set_swing'].includes(action)?'auto':'';
   const button = (name, symbol, action, color, value) => ({id:uid(),name,icon:symbol,action,color:color || '#56c4ed',showName:true,type:'button',value:value || ''});
-  const group = (name, symbol, kind) => ({...button(name,symbol,'open_group'),type:'group',group:kind,...(kind==='fan'?{fanSpeedCount:3,fanAuto:true}:kind==='swing'?{swingPositionCount:6,swingAuto:true,swingOff:true}:{}),children:['power_on','power_off','temp_up','temp_down','swing']});
+  const group = (name, symbol, kind) => ({...button(name,symbol,'open_group'),type:'group',group:kind,sendMode:'settings',...(kind==='fan'?{fanSpeedCount:3,fanAuto:true}:kind==='swing'?{swingPositionCount:6,swingAuto:true,swingOff:true}:{}),children:['power_on','power_off','temp_up','temp_down','swing']});
+  function officialGroupChoices(folder) {
+    if(folder.group==='mode')return modes;
+    if(folder.group==='fan')return fanChoices(folder).map(choice=>({...choice,icon:choice.value==='auto'?'auto':'fan-speed-'+clamp(folder.fanSpeedCount,2,5,3)+'-'+fans.indexOf(choice)}));
+    return folder.group==='swing'?swingChoices(folder):[];
+  }
+  function independentActionFor(folder,value) {
+    return (folder.independentActions||[]).find(node=>node.value===value&&independentStateEffect(node)?.[folder.group]===value);
+  }
+  function ensureIndependentActions(folder) {
+    if(!['mode','fan','swing'].includes(folder.group)||folder.sendMode!=='independent')return;
+    if(!Array.isArray(folder.independentActions))folder.independentActions=[];
+    for(const choice of officialGroupChoices(folder))if(!independentActionFor(folder,choice.value)){
+      const symbol=symbols.some(item=>item.value===choice.icon)?choice.icon:folder.group==='swing'?'swing':folder.group==='fan'?'fan':'remote';
+      folder.independentActions.push({...button(choice.name,symbol,'learned',folder.color,choice.value),state_effect:{[folder.group]:choice.value}});
+    }
+  }
   const row = (cells, columns = cells.length || 1) => ({id:uid(),type:'buttons',height:2,columns,cells});
   const displayRow = () => ({id:uid(),type:'display',height:2,width:3,style:'modern',accent:'#f4f6f8',fields:{temperature:true,mode:true,fan:true,swing:true,power:true}});
   const configurationCopy = s => s.power?{power:true,mode:s.mode,temperature:s.temperature,fan:s.fan,swing:swingValue(s)}:{power:false};
@@ -151,6 +167,7 @@ export function mountStudio(root,api,initial,isAdmin,openMenu) {
           if(d.type==='stateful'&&b.type==='button'&&b.action==='swing'&&b.icon==='wind'){b.type='group';b.group='swing';b.action='open_group';b.icon='swing';}
           if(b.type==='group'&&b.group==='fan'){b.fanSpeedCount=clamp(b.fanSpeedCount,2,5,3);b.fanAuto=b.fanAuto!==false;}
           if(b.type==='group'&&b.group==='swing'){b.swingPositionCount=clamp(b.swingPositionCount,1,6,6);b.swingAuto=b.swingAuto!==false;b.swingOff=b.swingOff!==false;if(b.icon==='wind')b.icon='swing';}
+          if(b.type==='group'&&['mode','fan','swing'].includes(b.group))b.sendMode=b.sendMode==='independent'?'independent':'settings';
           if(b.type==='dual'){b.actions=dualActions(b,d);b.activeSide=b.activeSide===1?1:0;}
           if (!symbols.some(i=>i.value===b.icon)) b.icon='remote';
         }
@@ -220,13 +237,13 @@ export function mountStudio(root,api,initial,isAdmin,openMenu) {
   const entityDomain = (d,b) => b._existingType|| (b.type==='dual'&&d.type==='simple'?'switch':b.type==='button'&&(d.type==='simple'||b.action==='learned')?'button':null);
   function automationButtons(d,root) {
     const result=[];
-    const visit=b=>{if(!b||typeof b!=='object')return;if(entityDomain(d,b))result.push(b);if(b.type==='group'&&b.group==='custom')(b.children||[]).forEach(visit);};
+    const visit=b=>{if(!b||typeof b!=='object')return;if(entityDomain(d,b))result.push(b);if(b.type==='group'&&b.group==='custom')(b.children||[]).forEach(visit);(b.independentActions||[]).forEach(visit);};
     if(root)visit(root);else d.rows.filter(r=>r.type==='buttons').forEach(r=>r.cells.forEach(visit));
     return result;
   }
   const allAutomationButtons = () => model.emitters.flatMap(e=>e.devices.flatMap(d=>automationButtons(d)));
   const allEntityRecords = () => model.emitters.flatMap(e=>e.devices.flatMap(d=>automationButtons(d).concat(d.savedStates||[])));
-  const proposedEntitySuffix = (d,b) => entitySlug([emitterFor(d.id)?.name,d.name,b.name].filter(Boolean).join('_'));
+  const proposedEntitySuffix = (d,b) => entitySlug([emitterFor(d.id)?.name,d.name,...Object.keys(independentStateEffect(b)||{}).map(key=>({mode:'modo',fan:'ventilador',swing:'oscilacion'})[key]),b.name].filter(Boolean).join('_'));
   function entityTaken(entity,id,d,root) {
     const previous=getButton(d,root.id)?.button;
     const replaced=new Set(previous?automationButtons(d,previous).map(b=>b.id):[]);
@@ -406,7 +423,7 @@ export function mountStudio(root,api,initial,isAdmin,openMenu) {
     const ready=!!record?.signal;
     const status=ready?'Estado aprendido':record?'Sin señal':'Sin aprender';
     return '<section class="state-capture-panel" aria-labelledby="current-state-title"><div class="state-capture-heading"><h2 id="current-state-title">Estado actual</h2><span class="state-status '+(ready?'available':'missing')+'">'+status+'</span></div><p class="state-summary">'+esc(configurationLabel(d.state))+'</p>'+
-      '<div class="state-capture-actions">'+(record?'<button class="btn primary" data-relearn-state="'+esc(record.id)+'">'+glyph('radio')+(ready?'Reaprender señal':'Aprender señal del mando original')+'</button>'+(ready?'<button class="btn danger" data-clear-state-signal="'+esc(record.id)+'">'+glyph('trash')+'Borrar señal</button>':'')+'<button class="btn danger" data-delete-saved-state="'+esc(record.id)+'">'+glyph('trash')+'Eliminar estado y entidad</button>':'<button class="btn primary" data-learn-state>'+glyph('radio')+'Aprender este estado del mando original</button>')+
+      '<div class="state-capture-actions">'+(record?'<button class="btn primary" data-relearn-state="'+esc(record.id)+'">'+glyph('radio')+(ready?'Reaprender señal':'Aprender señal del mando original')+'</button>'+(ready?'<button class="btn danger" data-clear-state-signal="'+esc(record.id)+'">'+glyph('trash')+'Borrar señal</button>':'')+'<button class="btn danger" data-delete-saved-state="'+esc(record.id)+'">'+glyph('trash')+'Eliminar estado y entidad</button>':'<button class="btn primary" data-learn-state>'+glyph('radio')+'Aprender estado</button>')+
       '</div>'+(!ready?'<p class="small muted state-capture-hint">'+(record?'La entidad se conserva. Aprende una señal para volver a utilizar este estado.':d.state.power?'Prepara estos mismos ajustes en el mando original y aprende la señal para guardar este estado.':'Aprende la señal de apagar del mando original.')+'</p>':'')+stateTable(d,record)+'</section>';
   }
   function stateTable(d,current) {
@@ -523,7 +540,23 @@ export function mountStudio(root,api,initial,isAdmin,openMenu) {
     if(b.type==='group'){openGroup(d,b);return false;}
     return executeAction(d,b);
   }
+  async function executeIndependent(d,b) {
+    if(independentSending){toast('Espera a que termine el envío.');return false;}
+    const effect=independentStateEffect(b);
+    if(!effect||b.signals?.press!==true||!b.signal_refs?.press){toast('Sin señal. Aprende esta opción al editar la carpeta.');return false;}
+    const key=b.id,name=b.name;
+    independentSending=true;
+    try{return await queuePhysical(async()=>{
+      const result=await api.call('press',{function_key:key});
+      if(disposed)return false;
+      if(result.model){confirmedWire=copy(result.model);revision=result.revision;catalog=result.catalog||catalog;reconcileCanonical(model,result.model);}
+      // A successful independent command changes only its declared setting.
+      // The backend persists this effect as part of press, without send_state.
+      Object.assign(d.state,effect);render();toast('Señal enviada · '+name+' · Estado estimado');return true;
+    });}finally{independentSending=false;}
+  }
   async function executeAction(d,b) {
+    if(independentSending){toast('Espera a que termine el envío.');return false;}
     if(signalBusy){toast('Espera a que termine el aprendizaje.');return false;}
     if (b.type==='group') {openGroup(d,b);return false;}
     if (b.type==='dual') {
@@ -536,6 +569,7 @@ export function mountStudio(root,api,initial,isAdmin,openMenu) {
       return success;
     }
     if (b.action==='learned') {
+      if(independentStateEffect(b))return executeIndependent(d,b);
       return queuePhysical(async()=>{if(!b.id)throw new Error('Esta función no tiene una señal aprendida.');await api.call('press',{function_key:b.id});if(!disposed)toast('Señal enviada · '+b.name);return true;});
     }
     const s=d.state;let label='Ajustes actualizados';
@@ -554,12 +588,17 @@ export function mountStudio(root,api,initial,isAdmin,openMenu) {
   }
   function openGroup(d,b) {
     let choices=[];
-    if(b.group==='mode') choices=modes.map(v=>({...v,action:'set_mode',selected:d.state.mode===v.value}));
+    const independent=d.type==='stateful'&&b.sendMode==='independent'&&['mode','fan','swing'].includes(b.group);
+    if(independent)choices=officialGroupChoices(b).map(choice=>{
+      const node=independentActionFor(b,choice.value),ready=node?.signals?.press===true&&!!node.signal_refs?.press;
+      return {...choice,...node,icon:choice.icon,action:'learned',selected:(b.group==='swing'?swingValue(d.state):d.state[b.group])===choice.value,unlearned:!ready};
+    });
+    else if(b.group==='mode') choices=modes.map(v=>({...v,action:'set_mode',selected:d.state.mode===v.value}));
     else if(b.group==='fan') choices=fanChoices(b).map(v=>({...v,icon:v.value==='auto'?'auto':'fan-speed-'+clamp(b.fanSpeedCount,2,5,3)+'-'+fans.indexOf(v),action:'set_fan',selected:d.state.fan===v.value}));
     else if(b.group==='swing') choices=swingChoices(b).map(option=>({...option,action:'set_swing',selected:swingValue(d.state)===option.value}));
     else choices=(b.children || []).map(child=>typeof child==='string'?({value:'',action:child,name:actionOptions.find(v=>v.value===child)?.name || 'Función',icon:({power_on:'power',power_off:'power-off',temp_up:'plus',temp_down:'minus',swing:'swing'})[child] || 'remote'}):child);
     if(!choices.length){toast('Edita esta carpeta para añadir sus botones.');return;}
-    showModal(b.name,'<div class="modal-options">'+choices.map((v,i)=>'<button class="option'+(v.selected?' selected':'')+'" data-group-option="'+i+'" aria-label="'+esc(v.name)+'"'+(typeof v.selected==='boolean'?' aria-pressed="'+v.selected+'"':'')+'>'+(v.icon==='none'?'':glyph(v.icon || 'fan'))+(v.showName!==false?'<span>'+esc(v.name)+'</span>':'')+'</button>').join('')+'</div>',[{label:'Cancelar'}],()=>{
+    showModal(b.name,'<div class="modal-options">'+choices.map((v,i)=>'<button class="option'+(v.selected?' selected':'')+'" data-group-option="'+i+'" aria-label="'+esc(v.name)+(v.unlearned?' · Sin señal':'')+'"'+(typeof v.selected==='boolean'?' aria-pressed="'+v.selected+'"':'')+(v.unlearned?' disabled':'')+'>'+(v.icon==='none'?'':glyph(v.icon || 'fan'))+(v.showName!==false?'<span>'+esc(v.name)+'</span>':'')+(v.unlearned?'<small>Sin señal</small>':'')+'</button>').join('')+'</div>',[{label:'Cancelar'}],()=>{
       $$('[data-group-option]',modalBody).forEach(element=>element.addEventListener('click',()=>{const choice=choices[Number(element.dataset.groupOption)];closeModal();execute(d,{...choice,type:'button',name:choice.name});},{signal:modalAbort.signal}));
     });
   }
@@ -583,7 +622,7 @@ export function mountStudio(root,api,initial,isAdmin,openMenu) {
     showModal('Duplicar dispositivo',field('Nombre del nuevo dispositivo','<input id="duplicate-name" maxlength="70" value="'+esc(d.name+' copia')+'">')+field('Emisor de destino','<select id="duplicate-emitter">'+selectOptions(model.emitters.map(emitter=>({value:emitter.id,name:emitter.name})),source.id)+'</select>')+'<p class="small muted">Se crearán entidades nuevas. El original conservará sus identificadores y automatizaciones. En otro emisor tendrás que aprender de nuevo las señales.</p><p id="form-error" class="warning" hidden></p>',[{label:'Cancelar'},{label:'Crear duplicado',className:'primary',run:async()=>{
       const name=$('#duplicate-name').value.trim(),destination=model.emitters.find(emitter=>emitter.id===$('#duplicate-emitter').value);if(!name||!destination){formError('Escribe un nombre y selecciona un emisor.');return;}
       const next=copy(d),same=destination.sourceId===source.sourceId;next.id=uid();next.name=name;next._functions=[];
-      const rewrite=node=>{if(!node)return;const legacySwitch=node._existingType==='switch';node.id=uid();delete node.entity;delete node._existingType;if(legacySwitch&&next.type==='stateful')node._existingType='switch';node.on=null;node.activeSide=0;if(!same){node.signal_refs={};node.signals={};node.actions?.forEach(side=>delete side.signal);}if(node.type==='group'&&node.group==='custom')(node.children||[]).forEach(rewrite);};
+      const rewrite=node=>{if(!node)return;const legacySwitch=node._existingType==='switch';node.id=uid();delete node.entity;delete node._existingType;if(legacySwitch&&next.type==='stateful')node._existingType='switch';node.on=null;node.activeSide=0;if(!same){node.signal_refs={};node.signals={};node.actions?.forEach(side=>delete side.signal);}if(node.type==='group'&&node.group==='custom')(node.children||[]).forEach(rewrite);(node.independentActions||[]).forEach(rewrite);};
       next.rows.forEach(row=>{row.id=uid();(row.cells||[]).forEach(rewrite);});
       (next.savedStates||[]).forEach(record=>{record.id=uid();delete record.entity;if(!same){record.signal=null;record.signal_refs={};}});
       destination.devices.push(next);if(await persist()){closeModal();render();toast(same?'Duplicado creado con entidades nuevas.':'Duplicado creado. Aprende sus señales en el nuevo emisor.');}
@@ -667,11 +706,17 @@ export function mountStudio(root,api,initial,isAdmin,openMenu) {
     };
     const renderLearningFields=()=>{
       const target=$('#function-learning');if(!target||signalBusy)return;
-      const functions=automationButtons(d,draft);
+      const functions=[];
+      const visit=node=>{
+        if(entityDomain(d,node))functions.push(node);
+        if(node.type==='group'&&node.group==='custom')(node.children||[]).forEach(visit);
+        else if(node.type==='group'&&node.sendMode==='independent')officialGroupChoices(node).forEach(choice=>{const action=independentActionFor(node,choice.value);if(action)visit(action);});
+      };visit(draft);
       target.innerHTML=functions.length?'<div class="function-signal-list">'+functions.flatMap(node=>(entityDomain(d,node)==='switch'?['on','off']:['press']).map(signal=>{
         const ref=node.signals?.[signal]===true?node.signal_refs?.[signal]:null,label=signal==='press'?node.name:(signal==='on'?'Encender':'Apagar')+' · Acción '+(signal==='on'?'1':'2');
-        return '<section class="function-signal-row" data-signal-row="'+esc(node.id+'|'+signal)+'"><strong>'+esc(label)+'</strong><div class="function-signal-status '+(ref?'available':'missing')+'">'+(ref?'Señal disponible':'Sin señal')+'</div><div class="function-signal-actions"><button type="button" class="btn" data-learn-function="'+esc(node.id)+'" data-signal="'+signal+'">'+glyph('radio')+(ref?'Reaprender señal':'Aprender del mando original')+'</button>'+(ref?'<button type="button" class="btn" data-test-function="'+esc(node.id)+'" data-signal="'+signal+'">Probar señal</button><button type="button" class="btn danger" data-clear-function="'+esc(node.id)+'" data-signal="'+signal+'">Borrar señal</button>':'')+'</div></section>';
+        return '<section class="function-signal-row" data-signal-row="'+esc(node.id+'|'+signal)+'"><strong>'+esc(label)+'</strong>'+(independentStateEffect(node)?entityField(node):'')+'<div class="function-signal-status '+(ref?'available':'missing')+'">'+(ref?'Señal disponible':'Sin señal')+'</div><div class="function-signal-actions"><button type="button" class="btn" data-learn-function="'+esc(node.id)+'" data-signal="'+signal+'">'+glyph('radio')+(ref?'Reaprender señal':'Aprender del mando original')+'</button>'+(ref?'<button type="button" class="btn" data-test-function="'+esc(node.id)+'" data-signal="'+signal+'">Probar señal</button><button type="button" class="btn danger" data-clear-function="'+esc(node.id)+'" data-signal="'+signal+'">Borrar señal</button>':'')+'</div></section>';
       })).join('')+'</div>':'';
+      $$('[data-entity-edit]',target).forEach(control=>{control.onclick=()=>openEntityEditor(functions.find(node=>node.id===control.dataset.entityEdit));});
       $$('[data-learn-function]',target).forEach(control=>control.addEventListener('click',async()=>{
         if(signalBusy)return;
         const node=functions.find(item=>item.id===control.dataset.learnFunction),signal=control.dataset.signal;if(!node)return;
@@ -778,15 +823,19 @@ export function mountStudio(root,api,initial,isAdmin,openMenu) {
       const target=$('#action-fields');if(!target)return;
       if(draft.type==='group') {
         const groups=d.type==='stateful'?[{value:'mode',name:'Modos del aire'},{value:'fan',name:'Velocidades del ventilador'},{value:'swing',name:'Posiciones y oscilación'},{value:'custom',name:'Botones personalizados'}]:[{value:'custom',name:'Botones personalizados'}];
+        const official=d.type==='stateful'&&['mode','fan','swing'].includes(draft.group);
+        draft.sendMode=draft.sendMode==='independent'?'independent':'settings';
         if(draft.group==='fan'){draft.fanSpeedCount=clamp(draft.fanSpeedCount,2,5,3);draft.fanAuto=draft.fanAuto!==false;}
         if(draft.group==='swing'){draft.swingPositionCount=clamp(draft.swingPositionCount,1,6,6);draft.swingAuto=draft.swingAuto!==false;draft.swingOff=draft.swingOff!==false;}
-        target.innerHTML=field('Contenido de la carpeta','<select id="group-kind">'+selectOptions(groups,draft.group)+'</select>')+(draft.group==='custom'?'<div id="folder-children" class="stack"></div>':draft.group==='fan'?field('Cantidad de velocidades','<select id="fan-speed-count">'+selectOptions([2,3,4,5].map(n=>({value:String(n),name:String(n)})),String(draft.fanSpeedCount))+'</select>')+checkField('fan-auto','Tiene modo automático',draft.fanAuto):draft.group==='swing'?field('Cantidad de posiciones fijas','<select id="swing-position-count">'+selectOptions([1,2,3,4,5,6].map(n=>({value:String(n),name:String(n)})),String(draft.swingPositionCount))+'</select>')+checkField('swing-auto','Tiene oscilación automática',draft.swingAuto)+checkField('swing-off','Permite desactivar la oscilación',draft.swingOff):'<p class="muted small">La carpeta abre una tarjeta centrada con las opciones del mando.</p>');
+        if(official)ensureIndependentActions(draft);
+        target.innerHTML=field('Contenido de la carpeta','<select id="group-kind">'+selectOptions(groups,draft.group)+'</select>')+(official?field('Cómo envía la señal','<select id="group-send-mode">'+selectOptions([{value:'settings',name:'Ajustes del mando'},{value:'independent',name:'Acción independiente'}],draft.sendMode)+'</select>')+'<p class="muted small">'+(draft.sendMode==='independent'?'Cada opción envía su propia señal. Aprende una señal que cambie solo esta función y comprueba que conserve los demás ajustes.':'Cada opción cambia el ajuste del mando y utiliza la señal del estado completo que corresponda.')+'</p>':'')+(draft.group==='custom'?'<div id="folder-children" class="stack"></div>':draft.group==='fan'?field('Cantidad de velocidades','<select id="fan-speed-count">'+selectOptions([2,3,4,5].map(n=>({value:String(n),name:String(n)})),String(draft.fanSpeedCount))+'</select>')+checkField('fan-auto','Tiene modo automático',draft.fanAuto):draft.group==='swing'?field('Cantidad de posiciones fijas','<select id="swing-position-count">'+selectOptions([1,2,3,4,5,6].map(n=>({value:String(n),name:String(n)})),String(draft.swingPositionCount))+'</select>')+checkField('swing-auto','Tiene oscilación automática',draft.swingAuto)+checkField('swing-off','Permite desactivar la oscilación',draft.swingOff):'<p class="muted small">La carpeta abre una tarjeta centrada con las opciones del mando.</p>');
         $('#group-kind')?.addEventListener('change',event=>{draft.group=event.target.value;if(draft.group==='swing'&&['folder','wind'].includes(draft.icon)){draft.icon='swing';$('#button-icon').value='swing';$('#button-icon').dispatchEvent(new Event('change',{bubbles:true}));}renderActionFields();preview();},{signal:modalAbort.signal});
-        $('#fan-speed-count')?.addEventListener('change',event=>{draft.fanSpeedCount=clamp(event.target.value,2,5,3);preview();},{signal:modalAbort.signal});
-        $('input[name="fan-auto"]',target)?.addEventListener('change',event=>{draft.fanAuto=event.target.checked;},{signal:modalAbort.signal});
-        $('#swing-position-count')?.addEventListener('change',event=>{draft.swingPositionCount=clamp(event.target.value,1,6,6);},{signal:modalAbort.signal});
-        $('input[name="swing-auto"]',target)?.addEventListener('change',event=>{draft.swingAuto=event.target.checked;},{signal:modalAbort.signal});
-        $('input[name="swing-off"]',target)?.addEventListener('change',event=>{draft.swingOff=event.target.checked;},{signal:modalAbort.signal});
+        $('#group-send-mode')?.addEventListener('change',event=>{draft.sendMode=event.target.value;renderActionFields();},{signal:modalAbort.signal});
+        $('#fan-speed-count')?.addEventListener('change',event=>{draft.fanSpeedCount=clamp(event.target.value,2,5,3);renderActionFields();preview();},{signal:modalAbort.signal});
+        $('input[name="fan-auto"]',target)?.addEventListener('change',event=>{draft.fanAuto=event.target.checked;renderActionFields();},{signal:modalAbort.signal});
+        $('#swing-position-count')?.addEventListener('change',event=>{draft.swingPositionCount=clamp(event.target.value,1,6,6);renderActionFields();},{signal:modalAbort.signal});
+        $('input[name="swing-auto"]',target)?.addEventListener('change',event=>{draft.swingAuto=event.target.checked;renderActionFields();},{signal:modalAbort.signal});
+        $('input[name="swing-off"]',target)?.addEventListener('change',event=>{draft.swingOff=event.target.checked;renderActionFields();},{signal:modalAbort.signal});
         if(draft.group==='custom')renderChildren();
       } else if(draft.type==='dual') {
         renderDual();
