@@ -21,7 +21,7 @@ const app={
   querySelector(selector){return selector==='[data-save-failure]'&&warningCount?{}:null;},
   insertAdjacentHTML(position,value){assert.equal(position,'afterbegin');html=value+html;if(value.includes('data-save-failure'))warningCount++;if(value.includes('data-action-error'))actionErrorCount++;}
 };
-const context={app,view:'remote',saveFailed:true,actionError:'',editing:false,model:{emitters:[],selected:'rolled-back-device'},ensureModelEntities(){},glyph:()=>'',esc:value=>value??''};
+const context={app,view:'remote',saveFailed:true,actionError:'',editing:false,model:{emitters:[],selected:'rolled-back-device'},ensureModelEntities(){},captureScrollPosition:()=>()=>{},refreshAmbientReadings(){},lastAmbientSnapshot:'',lastRenderedRoute:'',queueMicrotask(){},flushDeferredEnvelope(){},glyph:()=>'',esc:value=>value??''};
 context.selected=()=>context.model.emitters.flatMap(emitter=>emitter.devices).find(device=>device.id===context.model.selected);
 context.emitterFor=id=>context.model.emitters.find(emitter=>emitter.devices.some(device=>device.id===id));
 vm.createContext(context);vm.runInContext(renderCode,context);
@@ -36,7 +36,7 @@ vm.runInContext('render();',context);assert.equal(warningCount,1);
 const remote={id:'existing',name:'Split salón',type:'simple',icon:'remote',rows:[]};
 context.model={emitters:[{id:'emitter',name:'IR salón',model:'RM4 mini',devices:[remote]}],selected:remote.id};context.view='remote';
 vm.runInContext('render();render();',context);assert.equal(warningCount,1);assert.match(html,/Split salón/);
-assert.match(source,/hassChanged\(\)[^\n]*render\(\);/,'HA state updates must preserve the save failure alert');
+assert.match(source,/hassChanged\(\)\{refreshAmbientReadings\(\);\}/,'HA state updates must only patch ambient values, preserving the existing view and alerts');
 
 context.saveFailed=false;vm.runInContext('render();',context);assert.equal(warningCount,0);
 vm.runInContext("handleActionError({code:'service_unavailable',message:'El emisor no está disponible.'});",context);

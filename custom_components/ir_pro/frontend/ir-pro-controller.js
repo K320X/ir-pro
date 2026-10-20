@@ -1,9 +1,9 @@
-import {icon} from './ir-pro-icons.js?v=0.2.0b3';
-import {importModel,exportModel,reconcileCanonical} from './ir-pro-model.js?v=0.2.0b3';
-import {mountIconPickers} from './ir-pro-pickers.js?v=0.2.0b3';
+import {icon} from './ir-pro-icons.js?v=0.2.0b4';
+import {importModel,exportModel,reconcileCanonical} from './ir-pro-model.js?v=0.2.0b4';
+import {mountIconPickers} from './ir-pro-pickers.js?v=0.2.0b4';
 export function mountStudio(root,api,initial,isAdmin,openMenu) {
   const scope=root.getRootNode(),lifecycle=new AbortController();
-  let disposed=false,catalog=initial.catalog||[],revision=initial.revision||0,saveQueue=Promise.resolve(true),saveFailed=false,actionError='',signalBusy=false,operation=0,pendingSaves=0,unsubscribe=null;
+  let disposed=false,catalog=initial.catalog||[],revision=initial.revision||0,saveQueue=Promise.resolve(true),saveFailed=false,actionError='',signalBusy=false,operation=0,pendingSaves=0,unsubscribe=null,lastAmbientSnapshot='',deferredEnvelope=null,scrollGeneration=0,inputGeneration=0,lastRenderedRoute='';
 
   'use strict';
   const app = scope.querySelector('#app');
@@ -186,11 +186,11 @@ export function mountStudio(root,api,initial,isAdmin,openMenu) {
         toast((error.message||'No se han podido guardar los cambios.')+' Recarga el panel antes de continuar.');
         return false;
       }
-    }).finally(()=>{pendingSaves--;});return saveQueue;
+    }).finally(()=>{pendingSaves--;flushDeferredEnvelope();});return saveQueue;
   }
   function queuePhysical(action) {
     pendingSaves++;
-    saveQueue=saveQueue.then(async()=>{if(disposed||saveFailed)return false;try{const success=await action();if(success)clearActionError();return success;}catch(error){if(!disposed)handleActionError(error);return false;}}).finally(()=>{pendingSaves--;});
+    saveQueue=saveQueue.then(async()=>{if(disposed||saveFailed)return false;try{const success=await action();if(success)clearActionError();return success;}catch(error){if(!disposed)handleActionError(error);return false;}}).finally(()=>{pendingSaves--;flushDeferredEnvelope();});
     return saveQueue;
   }
   function queueRequest(action) {
@@ -199,15 +199,23 @@ export function mountStudio(root,api,initial,isAdmin,openMenu) {
     saveQueue=saveQueue.then(async()=>{
       if(disposed||saveFailed){rejectRequest(new Error('Recarga el panel antes de continuar.'));return false;}
       try{const result=await action();clearActionError();resolveRequest(result);return true;}catch(error){rejectRequest(error);return false;}
-    }).finally(()=>{pendingSaves--;});
+    }).finally(()=>{pendingSaves--;flushDeferredEnvelope();});
     return request;
   }
   function receiveEnvelope(envelope) {
     if(disposed||!envelope?.model)return;
+    if(envelope.revision<revision){if(deferredEnvelope===envelope)deferredEnvelope=null;return;}
     catalog=envelope.catalog||catalog;
-    if(pendingSaves||modal.open||editing||signalBusy||saveFailed||envelope.revision<revision)return;
+    refreshAmbientReadings();
+    if(JSON.stringify(envelope.model)===JSON.stringify(confirmedWire)){
+      if(!pendingSaves){revision=envelope.revision;deferredEnvelope=null;}
+      return;
+    }
+    if(pendingSaves||modal.open||entityModal.open||editing||signalBusy||saveFailed){if(!deferredEnvelope||envelope.revision>=deferredEnvelope.revision)deferredEnvelope=envelope;return;}
+    deferredEnvelope=null;
     revision=envelope.revision;confirmedWire=copy(envelope.model);model=importModel(envelope.model,model.selected);model.emitters.forEach(emitter=>emitter.devices.forEach(validateDevice));render();
   }
+  function flushDeferredEnvelope() {if(deferredEnvelope&&!disposed&&!pendingSaves&&!modal.open&&!entityModal.open&&!editing&&!signalBusy&&!saveFailed)receiveEnvelope(deferredEnvelope);}
   const entitySlug = value => String(value || '').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().replace(/[^a-z0-9]+/g,'_').replace(/^_+|_+$/g,'').slice(0,190) || 'funcion';
   const entityDomain = (d,b) => b._existingType|| (b.type==='dual'&&d.type==='simple'?'switch':b.type==='button'&&(d.type==='simple'||b.action==='learned')?'button':null);
   function automationButtons(d,root) {
@@ -244,10 +252,25 @@ export function mountStudio(root,api,initial,isAdmin,openMenu) {
   function handleActionError(error) {
     actionError=error?.message||'No se ha podido enviar la señal. Comprueba el emisor y vuelve a intentarlo.';render();
   }
+  function captureScrollPosition(reset=false) {
+    const generation=++scrollGeneration,interaction=inputGeneration,positions=[],seen=new Set();
+    const remember=element=>{
+      if(!element||seen.has(element)||typeof element.scrollTop!=='number')return;seen.add(element);
+      if(element.scrollTop||element.scrollLeft||element.scrollHeight>element.clientHeight||element.scrollWidth>element.clientWidth)positions.push({element,top:reset?0:element.scrollTop,left:reset?0:element.scrollLeft});
+    };
+    let ancestor=root;while(ancestor){remember(ancestor);ancestor=ancestor.parentNode||ancestor.host;}
+    remember(root.ownerDocument?.scrollingElement);root.querySelectorAll('*').forEach(remember);
+    const restore=()=>{if(disposed||generation!==scrollGeneration||interaction!==inputGeneration)return;for(const {element,top,left} of positions)if(element.isConnected!==false){if(element.scrollTop!==top)element.scrollTop=top;if(element.scrollLeft!==left)element.scrollLeft=left;}};
+    return ()=>{restore();requestAnimationFrame(restore);};
+  }
   const selectOptions = (items,value) => items.map(item=>'<option value="'+esc(item.value)+'"'+(item.value===value?' selected':'')+'>'+esc(item.name)+'</option>').join('');
   const field = (label,html) => '<label class="field"><span>'+esc(label)+'</span>'+html+'</label>';
   const checkField = (key,label,checked) => '<label class="choice small"><input type="checkbox" name="'+esc(key)+'"'+(checked?' checked':'')+'> '+esc(label)+'</label>';
   function closeModal() {if (modal.open) modal.close();}
+  function openNeutralDialog(dialog) {
+    const heading=dialog.querySelector('.modal-head h2')||dialog;heading.tabIndex=-1;heading.setAttribute('autofocus','');dialog.setAttribute('autofocus','');
+    const restoreScroll=captureScrollPosition();dialog.showModal();heading.focus({preventScroll:true});restoreScroll();
+  }
   function showModal(title,body,buttons,setup) {
     if (modal.open) modal.close();
     modalAbort?.abort();modalAbort=new AbortController();
@@ -258,8 +281,7 @@ export function mountStudio(root,api,initial,isAdmin,openMenu) {
       const b=document.createElement('button');b.type='button';b.className='btn '+(config.className||'');b.textContent=config.label;
       b.addEventListener('click',async()=>{if(config.run){b.disabled=true;try{await config.run();}catch(error){formError(error.message||'No se ha podido completar la operación.');}finally{if(b.isConnected)b.disabled=false;}}else closeModal();},{signal:modalAbort.signal});modalFoot.appendChild(b);
     }
-    modal.showModal();setup?.();
-    requestAnimationFrame(()=>{const first=$('input:not([type=checkbox]):not([type=color]),select,button.option',modalBody);if(first)first.focus();else $('button',modalFoot)?.focus();});
+    openNeutralDialog(modal);setup?.();
   }
   $('#modal-close')?.addEventListener('click',closeModal);
   function bindBackdropClose(dialog) {
@@ -285,12 +307,21 @@ export function mountStudio(root,api,initial,isAdmin,openMenu) {
   });
   }
   bindBackdropClose(modal);bindBackdropClose(entityModal);
-  modal.addEventListener('close',()=>{if(entityModal.open)entityModal.close();});
+  modal.addEventListener('close',()=>{if(entityModal.open)entityModal.close();queueMicrotask(flushDeferredEnvelope);});
+  entityModal.addEventListener('close',()=>queueMicrotask(flushDeferredEnvelope));
   entityModal.addEventListener('cancel',event=>event.stopPropagation());
   const currentMode = state => modes.find(m=>m.value===state.mode) || modes[0];
   const temperatureAvailable = d => !['dry','fan'].includes(d.state.mode);
   const stateText = d => [currentMode(d.state).name,temperatureAvailable(d) ? d.state.temperature+' °C' : '',fanDescription(d.state.fan)].filter(Boolean).join(' · ');
   function displayAccent(value) {return /^#[0-9a-f]{6}$/i.test(value||'')&&value.toLowerCase()!=='#b9c9b0'?value:'#f4f6f8';}
+  function refreshAmbientReadings() {
+    if(disposed)return;
+    const displays=Array.from(root.querySelectorAll('.display-shell[data-display-device]'));
+    const readings=new Map();
+    for(const display of displays){const id=display.dataset.displayDevice;if(readings.has(id))continue;const device=model.emitters.flatMap(emitter=>emitter.devices).find(item=>item.id===id);if(!device)continue;const ambient=ambientFor(device);readings.set(id,{humidity:ambientHTML(ambient.humidity,'humidity'),temperature:ambientHTML(ambient.temperature,'temperature')});}
+    const snapshot=JSON.stringify(Array.from(readings));if(snapshot===lastAmbientSnapshot)return;lastAmbientSnapshot=snapshot;
+    for(const display of displays){const values=readings.get(display.dataset.displayDevice);if(!values)continue;for(const kind of ['humidity','temperature']){const slot=display.querySelector('[data-ambient-kind="'+kind+'"]');if(slot&&slot.innerHTML!==values[kind])slot.innerHTML=values[kind];}const container=display.querySelector('.display-readings'),hasAmbient=!!(values.humidity||values.temperature);if(container){container.classList.toggle('has-ambient',hasAmbient);container.hidden=!hasAmbient&&!display.querySelector('.display-target')?.hasChildNodes();}}
+  }
   function displayHTML(d,r,preview=false) {
     const s=d.state,f=r.fields || {},mode=currentMode(s),hasState=d.type==='stateful',temperature=hasState&&temperatureAvailable(d)?s.temperature:'—';
     const power=f.power ? '<span class="chip display-power'+(hasState?(s.power?' power-on':' power-off'):'')+'">'+glyph(hasState?(s.power?'power':'power-off'):'info')+(hasState?(s.power?'Encendido':'Apagado'):'Sin datos vinculados')+'</span>' : '';
@@ -305,10 +336,10 @@ export function mountStudio(root,api,initial,isAdmin,openMenu) {
     const humidity=ambientHTML(readings.humidity,'humidity'),ambient=ambientHTML(readings.temperature,'temperature');
     const hasAmbient=!!(humidity||ambient);
     const target=f.temperature?'<div class="display-main"><span class="display-value">'+esc(temperature)+'</span><span class="display-unit">°C</span></div><div class="preview-label small">'+(hasState?(temperatureAvailable(d)?'Objetivo':'Sin ajuste'):'Objetivo')+'</div>':'';
-    return '<div class="display-shell '+esc(r.style||'lcd')+(s.power?'':' off-state')+(canEdit?' is-editable':'')+'" data-height="'+height+'" data-width="'+width+'" style="--display-accent:'+esc(accent)+';--level:'+height+';--display-width:'+(width*112+(width-1)*12)+'px;--display-height:'+(112+(height-2)*30)+'px">'+
+    return '<div class="display-shell '+esc(r.style||'lcd')+(s.power?'':' off-state')+(canEdit?' is-editable':'')+'" data-display-device="'+esc(d.id)+'" data-height="'+height+'" data-width="'+width+'" style="--display-accent:'+esc(accent)+';--level:'+height+';--display-width:'+(width*112+(width-1)*12)+'px;--display-height:'+(112+(height-2)*30)+'px">'+
       (canEdit?'<button type="button" class="display-edit-function" data-edit-display="'+esc(r.id)+'" aria-label="Editar función de pantalla"><span class="button-top">Editar función</span></button>':'')+
       '<div class="display-top">'+power+'</div>'+
-      ((target||hasAmbient)?'<div class="display-readings'+(hasAmbient?' has-ambient':'')+'"><div class="display-ambient-slot">'+humidity+'</div><div class="display-target">'+target+'</div><div class="display-ambient-slot">'+ambient+'</div></div>':'')+
+      '<div class="display-readings'+(hasAmbient?' has-ambient':'')+'"'+(!target&&!hasAmbient?' hidden':'')+'><div class="display-ambient-slot" data-ambient-kind="humidity">'+humidity+'</div><div class="display-target">'+target+'</div><div class="display-ambient-slot" data-ambient-kind="temperature">'+ambient+'</div></div>'+
       '<div class="display-bottom">'+modePart+fansPart+swingPart+'</div></div>';
   }
   function buttonHTML(d,b,r,index) {
@@ -349,9 +380,12 @@ export function mountStudio(root,api,initial,isAdmin,openMenu) {
   }
   function render() {
     if(view!=='home'&&!selected())view='home';
+    const route=view+':'+(view==='remote'?model.selected:'');
+    const restoreScroll=captureScrollPosition(lastRenderedRoute!==route);lastRenderedRoute=route;
     ensureModelEntities();if(view==='home')renderHome();else renderRemote();
     if(saveFailed&&!app.querySelector('[data-save-failure]'))app.insertAdjacentHTML('afterbegin','<div class="warning" role="alert" data-save-failure><span aria-hidden="true">⚠</span><div><strong>No se han guardado los últimos cambios.</strong><p>Se ha recuperado la última configuración confirmada. Recarga el panel para continuar.</p><button type="button" class="btn" data-refresh-panel>Recargar panel</button></div></div>');
     if(actionError&&!saveFailed)app.insertAdjacentHTML('afterbegin','<p class="action-error" role="alert" data-action-error>'+esc(actionError)+'</p>');
+    lastAmbientSnapshot='';refreshAmbientReadings();restoreScroll();queueMicrotask(flushDeferredEnvelope);
   }
   function getButton(d,id) {for(const r of d.rows){const i=r.cells?.findIndex(b=>b?.id===id);if(i>=0)return {row:r,index:i,button:r.cells[i]};}return null;}
   function stateCapturePanel(d) {
@@ -425,7 +459,7 @@ export function mountStudio(root,api,initial,isAdmin,openMenu) {
             capture={kind:'learned',id:result.signal_ref,capturedAt:new Date().toISOString()};
             status.innerHTML='<span class="state-learn-symbol">'+glyph('check')+'</span><strong>Señal recibida</strong><span>Puedes guardar el estado directamente.</span>';status.classList.remove('listening');status.classList.add('available');test.hidden=false;save.disabled=false;
           }catch(error){if(!disposed&&!modalSignal.aborted){status.classList.remove('listening');status.innerHTML='<strong>No se ha recibido la señal</strong><span>'+esc(error.message||'Comprueba el receptor y vuelve a intentarlo.')+'</span>';retry.hidden=false;}}
-          finally{signalBusy=false;}
+          finally{signalBusy=false;flushDeferredEnvelope();}
         };
         $('#retry-state-capture').addEventListener('click',receive,{signal:modalSignal});
         $('#test-state-capture').addEventListener('click',async()=>{if(!capture)return;try{await queueRequest(()=>api.call('test_signal',{signal_ref:capture.id}));toast('Señal enviada. Comprueba el resultado en el aparato.');}catch(error){formError(error.message||'No se ha podido probar la señal.');}},{signal:modalSignal});
@@ -589,7 +623,7 @@ export function mountStudio(root,api,initial,isAdmin,openMenu) {
   function confirmSignalRemoval(label,run) {
     const dialog=document.createElement('dialog');dialog.className='signal-delete-modal';
     dialog.innerHTML='<header class="modal-head"><h2>Borrar señal aprendida</h2></header><div class="modal-body"><p>'+esc(label)+'</p><div class="warning"><span aria-hidden="true">⚠</span><div><strong>Borrado definitivo de la señal.</strong><p>La entidad se conserva. Las automatizaciones que la utilicen dejarán de ejecutar esta función hasta que vuelvas a aprender la señal y guardes los cambios.</p></div></div></div><footer class="modal-foot"><button type="button" class="btn" data-cancel>Cancelar</button><button type="button" class="btn danger" data-confirm>Borrar señal</button></footer>';
-    root.appendChild(dialog);dialog.querySelector('[data-cancel]').onclick=()=>dialog.close();dialog.querySelector('[data-confirm]').onclick=()=>{run();dialog.close();};dialog.addEventListener('close',()=>dialog.remove(),{once:true});dialog.showModal();
+    root.appendChild(dialog);dialog.querySelector('[data-cancel]').onclick=()=>dialog.close();dialog.querySelector('[data-confirm]').onclick=()=>{run();dialog.close();};dialog.addEventListener('close',()=>dialog.remove(),{once:true});openNeutralDialog(dialog);
   }
   function editButton(d,original,placement,newType='button') {
     if(signalBusy){toast('Hay un aprendizaje en curso. Espera a que termine antes de editar otra función.');return;}
@@ -647,7 +681,7 @@ export function mountStudio(root,api,initial,isAdmin,openMenu) {
             test.addEventListener('click',async()=>{test.disabled=true;try{await queueRequest(()=>api.call('test_signal',{signal_ref:node.signal_refs[signal]}));toast('Señal enviada. Comprueba el resultado en el aparato.');}catch(error){formError(error.message||'No se ha podido probar la señal.');}finally{test.disabled=false;}},{signal:modalSignal});control.parentElement.appendChild(test);
           }
         }catch(error){if(!disposed&&!modalSignal.aborted){status.classList.remove('listening');status.textContent=error.message||'No se ha recibido la señal. Vuelve a intentarlo.';}}
-        finally{signalBusy=false;if(!disposed&&!modalSignal.aborted){save.disabled=false;control.disabled=false;}}
+        finally{signalBusy=false;if(!disposed&&!modalSignal.aborted){save.disabled=false;control.disabled=false;}flushDeferredEnvelope();}
       },{signal:modalAbort.signal}));
       $$('[data-test-function]',target).forEach(control=>control.addEventListener('click',async()=>{const node=functions.find(item=>item.id===control.dataset.testFunction),ref=node?.signal_refs?.[control.dataset.signal];if(!ref)return;control.disabled=true;try{await queueRequest(()=>api.call('test_signal',{signal_ref:ref}));toast('Señal enviada. Comprueba el resultado en el aparato.');}catch(error){formError(error.message||'No se ha podido probar la señal.');}finally{control.disabled=false;}},{signal:modalAbort.signal}));
       $$('[data-clear-function]',target).forEach(control=>control.addEventListener('click',()=>{const node=functions.find(item=>item.id===control.dataset.clearFunction);if(node)confirmSignalRemoval(node.name,()=>{delete node.signal_refs[control.dataset.signal];renderLearningFields();});},{signal:modalAbort.signal}));
@@ -666,14 +700,14 @@ export function mountStudio(root,api,initial,isAdmin,openMenu) {
         else if(entityTaken(domain+'.'+suffix,b.id,d,draft))message='Esa entidad ya está en uso por otra función. Elige otro nombre.';
         if(message){error.textContent=message;error.hidden=false;input.setAttribute('aria-invalid','true');input.focus();return;}
         b.entity=domain+'.'+suffix;fixedEntities.add(b.id);entityModal.close();renderEntityFields();
-        $('[data-entity-edit="'+CSS.escape(b.id)+'"]',modalBody)?.focus();
+        $('[data-entity-edit="'+CSS.escape(b.id)+'"]',modalBody)?.focus({preventScroll:true});
       };
       $('#entity-cancel').addEventListener('click',()=>entityModal.close(),{signal});
       $('#entity-accept').addEventListener('click',accept,{signal});
       input.addEventListener('input',()=>{error.hidden=true;input.removeAttribute('aria-invalid');},{signal});
       input.addEventListener('keydown',event=>{if(event.key==='Enter'){event.preventDefault();accept();}},{signal});
       entityModal.addEventListener('close',()=>controller.abort(),{once:true});
-      entityModal.showModal();input.focus();
+      openNeutralDialog(entityModal);
     };
     const preview=()=>{
       const target=$('#button-live');if(!target)return;
@@ -895,12 +929,13 @@ export function mountStudio(root,api,initial,isAdmin,openMenu) {
     if(from&&to?.type==='buttons'&&index>=0&&index<to.columns){const moving=from.button;from.row.cells[from.index]=to.cells[index];to.cells[index]=moving;persist();clearDrag();render();const landed=app.querySelector('[data-button="'+CSS.escape(moving.id)+'"]');landed?.animate([{transform:'scale(.94)',opacity:.6},{transform:'scale(1)',opacity:1}],{duration:280,easing:'cubic-bezier(.16,1,.3,1)'});toast('Botón colocado.');}else clearDrag();
   });
   app.addEventListener('dragend',clearDrag);
+  for(const event of ['wheel','touchmove','pointerdown','keydown'])window.addEventListener(event,()=>{inputGeneration++;},{capture:true,passive:true,signal:lifecycle.signal});
   scope.querySelector('#sidebar-toggle')?.addEventListener('click',openMenu,{signal:lifecycle.signal});
   mountIconPickers(scope,lifecycle);
   if(api.subscribe)Promise.resolve(api.subscribe(receiveEnvelope)).then(stop=>{if(disposed)stop?.();else unsubscribe=stop;}).catch(()=>{});
   render();
   return {
-    hassChanged(){if(disposed||modal.open||editing)return;const d=selected();if(d&&view==='remote')render();},
+    hassChanged(){refreshAmbientReadings();},
     dispose(){disposed=true;operation++;unsubscribe?.();modalAbort?.abort();lifecycle.abort();clearTimeout(toastTimer);clearDrag();clearTouchDrag();for(const entry of Array.from(landingGhosts))finishTouchLanding(entry);if(modal.open)modal.close();if(entityModal.open)entityModal.close();}
   };
 }

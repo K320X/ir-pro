@@ -34,6 +34,7 @@ jobs:
         run: find custom_components/ir_pro/frontend -name '*.js' -print0 | xargs -0 -n 1 node --check
       - run: node tests/frontend-model.mjs
       - run: node tests/frontend-controller-render.mjs
+      - run: node tests/frontend-updates.mjs
       - run: python scripts/build_release.py
   hacs:
     name: HACS custom repository

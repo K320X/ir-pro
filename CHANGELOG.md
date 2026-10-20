@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.0b4
+
+- Keep the remote DOM and scroll position stable when unrelated Home Assistant states change or an unchanged model is received.
+- Open dialogs on a neutral heading instead of automatically focusing a text field, select or first option.
+- Show keyboard focus outlines only during keyboard navigation, keeping selected options visually distinct on touch screens.
+- Replace the browser-dependent color well with a consistent swatch while retaining the native color picker and live previews.
+
 ## 0.2.0b3
 
 - Rename remotes with settings to Mando con estados and provide an editable air-conditioner starting layout with one combined on/off button.
