@@ -386,7 +386,7 @@ class IRProManager:
         _, device = self._find_device(device_id)
         studio = device.get("studio")
         if not studio or studio["type"] != "stateful":
-            raise IRProError("invalid_model", "Este dispositivo no es un mando con ajustes.")
+            raise IRProError("invalid_model", "Este dispositivo no es un mando con estados.")
         key = configuration_key(normalized)
         matches = [item for item in studio["savedStates"] if configuration_key(item["settings"]) == key]
         record = next((item for item in matches if self.function_available(item["id"])), matches[0] if matches else None)

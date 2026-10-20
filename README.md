@@ -35,7 +35,7 @@ Changes are stored in Home Assistant, not in browser storage. Transmitter select
 
 ## Remotes with settings
 
-When creating a device, choose **Mando con ajustes** for equipment such as an air conditioner that sends its complete configuration in an IR message. Add a display and controls for temperature, mode, fan or swing. A folder can contain two to five fan speeds, with optional automatic mode, or up to six fixed swing positions with optional oscillation and disabled states.
+When creating a device, choose **Mando con estados** for equipment such as an air conditioner that sends its complete configuration in an IR message. The editable starting layout includes a display, mode, one combined on/off button, five fan speeds with automatic mode, temperature controls, six swing positions with oscillation and disabled options, and a light button. Every element can be edited or removed. Existing layouts are preserved. Fan folders can be configured for two to five speeds.
 
 To learn a state, first prepare the settings in IR Pro and on the physical remote. Select **Aprender este estado del mando original**. For an on state, start with the physical remote off, point it at the transmitter and press **Encender** with the intended settings. For the off state, press **Apagar**. A temperature or fan key may not include the instruction to turn the appliance on. Save after the signal is received. Each learned state appears in the state/entity table as a real `button` entity. The off state is independent of temperature, mode, fan and swing. Copy the entity ID to use it in automations.
 

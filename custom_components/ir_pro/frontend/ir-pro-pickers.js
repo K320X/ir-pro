@@ -1,4 +1,4 @@
-import {icon} from './ir-pro-icons.js?v=0.2.0b2';
+import {icon} from './ir-pro-icons.js?v=0.2.0b3';
 export function mountIconPickers(scope,lifecycle) {
   'use strict';
   // Keep native selects as the model-facing source; the visible picker adds SVG previews.

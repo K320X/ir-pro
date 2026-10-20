@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.2.0b3
+
+- Rename remotes with settings to Mando con estados and provide an editable air-conditioner starting layout with one combined on/off button.
+- Start fan controls with five speeds plus automatic mode and swing controls with six positions, oscillation and disabled states.
+- Brighten active display readings and keep room temperature and humidity active while the appliance settings are dimmed when off.
+- Remove floating informational messages, retaining accessible status announcements and inline reporting for actual failures.
+- Preserve existing remotes, learned states, identities and custom layouts.
+
 ## 0.2.0b2
 
 - Fix repeated save failures after deleting a remote by using Home Assistant's current device registry removal API.

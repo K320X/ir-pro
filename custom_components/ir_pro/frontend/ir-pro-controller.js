@@ -1,9 +1,9 @@
-import {icon} from './ir-pro-icons.js?v=0.2.0b2';
-import {importModel,exportModel,reconcileCanonical} from './ir-pro-model.js?v=0.2.0b2';
-import {mountIconPickers} from './ir-pro-pickers.js?v=0.2.0b2';
+import {icon} from './ir-pro-icons.js?v=0.2.0b3';
+import {importModel,exportModel,reconcileCanonical} from './ir-pro-model.js?v=0.2.0b3';
+import {mountIconPickers} from './ir-pro-pickers.js?v=0.2.0b3';
 export function mountStudio(root,api,initial,isAdmin,openMenu) {
   const scope=root.getRootNode(),lifecycle=new AbortController();
-  let disposed=false,catalog=initial.catalog||[],revision=initial.revision||0,saveQueue=Promise.resolve(true),saveFailed=false,signalBusy=false,operation=0,pendingSaves=0,unsubscribe=null;
+  let disposed=false,catalog=initial.catalog||[],revision=initial.revision||0,saveQueue=Promise.resolve(true),saveFailed=false,actionError='',signalBusy=false,operation=0,pendingSaves=0,unsubscribe=null;
 
   'use strict';
   const app = scope.querySelector('#app');
@@ -41,7 +41,7 @@ export function mountStudio(root,api,initial,isAdmin,openMenu) {
   const button = (name, symbol, action, color, value) => ({id:uid(),name,icon:symbol,action,color:color || '#56c4ed',showName:true,type:'button',value:value || ''});
   const group = (name, symbol, kind) => ({...button(name,symbol,'open_group'),type:'group',group:kind,...(kind==='fan'?{fanSpeedCount:3,fanAuto:true}:kind==='swing'?{swingPositionCount:6,swingAuto:true,swingOff:true}:{}),children:['power_on','power_off','temp_up','temp_down','swing']});
   const row = (cells, columns = cells.length || 1) => ({id:uid(),type:'buttons',height:2,columns,cells});
-  const displayRow = () => ({id:uid(),type:'display',height:2,width:3,style:'lcd',accent:'#b9c9b0',fields:{temperature:true,mode:true,fan:true,swing:true,power:true}});
+  const displayRow = () => ({id:uid(),type:'display',height:2,width:3,style:'modern',accent:'#f4f6f8',fields:{temperature:true,mode:true,fan:true,swing:true,power:true}});
   const configurationCopy = s => s.power?{power:true,mode:s.mode,temperature:s.temperature,fan:s.fan,swing:swingValue(s)}:{power:false};
   const configurationKey = s => JSON.stringify(s.power?[true,s.mode,['dry','fan'].includes(s.mode)?null:s.temperature,s.fan,swingValue(s)]:[false]);
   const savedStateFor = (d,s=d.state) => (d.savedStates||[]).find(record=>configurationKey(record.settings)===configurationKey(s));
@@ -98,12 +98,12 @@ export function mountStudio(root,api,initial,isAdmin,openMenu) {
     return b.activeSide===1?1:0;
   }
   const newRemote = (name, symbol, type) => {
-    const d = {id:uid(),name,icon:symbol,type,state:{power:true,mode:'cool',temperature:24,fan:'auto',swing:'off'},rows:[]};
+    const d = {id:uid(),name,icon:symbol,type,state:{power:false,mode:'cool',temperature:24,fan:'auto',swing:'off'},rows:[]};
     if (type === 'stateful') d.rows = [
       displayRow(),
-      row([button('Encender','power','power_on','#6cd9a2'),button('Apagar','power-off','power_off','#ff8b80'),group('Modo','snowflake','mode')]),
-      row([button('Bajar','minus','temp_down'),button('Subir','plus','temp_up'),group('Ventilador','fan','fan')]),
-      row([{...group('Oscilación','swing','swing'),color:'#c6b5ff'},button('Luz','light','learned','#f6cf79')],2)
+      row([{...group('Modo','snowflake','mode'),color:'#f6cf79'},{...button('Encendido del aire','power','power_on','#6cd9a2'),type:'dual',activeSide:0,actions:[{name:'Apagado',icon:'power-off',color:'#ff8b80',showName:true,action:'power_on',value:''},{name:'Encendido',icon:'power',color:'#6cd9a2',showName:true,action:'power_off',value:''}]},{...group('Ventilador','fan','fan'),fanSpeedCount:5,fanAuto:true}]),
+      row([button('Bajar','minus','temp_down','#6cd9ce'),{...group('Oscilación','swing','swing'),color:'#c6b5ff'},button('Subir','plus','temp_up','#6cd9ce')]),
+      row([null,button('Luz','light','learned','#f6cf79'),null],3)
     ];
     else {
       const folder=group('Opciones','folder','custom');
@@ -178,7 +178,7 @@ export function mountStudio(root,api,initial,isAdmin,openMenu) {
         if(disposed)return false;
         revision=result.revision;catalog=result.catalog||catalog;confirmedWire=copy(result.model);reconcileCanonical(model,result.model,snapshot);
         if(result.notices?.length)toast(result.notices.join(' '));
-        if(afterSave){try{return await afterSave();}catch(error){if(!disposed)toast(error.message||'No se ha podido enviar la señal.');return false;}}
+        if(afterSave){try{const success=await afterSave();if(success)clearActionError();return success;}catch(error){if(!disposed)handleActionError(error);return false;}}
         return true;
       }catch(error){
         if(disposed)return false;
@@ -190,7 +190,7 @@ export function mountStudio(root,api,initial,isAdmin,openMenu) {
   }
   function queuePhysical(action) {
     pendingSaves++;
-    saveQueue=saveQueue.then(async()=>{if(disposed||saveFailed)return false;try{return await action();}catch(error){if(!disposed)toast(error.message||'No se ha podido enviar la señal.');return false;}}).finally(()=>{pendingSaves--;});
+    saveQueue=saveQueue.then(async()=>{if(disposed||saveFailed)return false;try{const success=await action();if(success)clearActionError();return success;}catch(error){if(!disposed)handleActionError(error);return false;}}).finally(()=>{pendingSaves--;});
     return saveQueue;
   }
   function queueRequest(action) {
@@ -198,7 +198,7 @@ export function mountStudio(root,api,initial,isAdmin,openMenu) {
     const request=new Promise((resolve,reject)=>{resolveRequest=resolve;rejectRequest=reject;});pendingSaves++;
     saveQueue=saveQueue.then(async()=>{
       if(disposed||saveFailed){rejectRequest(new Error('Recarga el panel antes de continuar.'));return false;}
-      try{const result=await action();resolveRequest(result);return true;}catch(error){rejectRequest(error);return false;}
+      try{const result=await action();clearActionError();resolveRequest(result);return true;}catch(error){rejectRequest(error);return false;}
     }).finally(()=>{pendingSaves--;});
     return request;
   }
@@ -237,8 +237,12 @@ export function mountStudio(root,api,initial,isAdmin,openMenu) {
   }
   function toast(message) {
     const element=$('#toast'); if (!element) return;
-    element.textContent=message;element.classList.add('visible');element.hidden=false;
-    clearTimeout(toastTimer);toastTimer=setTimeout(()=>{element.classList.remove('visible');element.hidden=true;},4000);
+    element.classList.remove('visible','show');element.classList.add('sr-only');element.hidden=false;element.textContent=message;
+    clearTimeout(toastTimer);toastTimer=setTimeout(()=>{element.textContent='';},4000);
+  }
+  function clearActionError() {if(actionError){actionError='';render();}}
+  function handleActionError(error) {
+    actionError=error?.message||'No se ha podido enviar la señal. Comprueba el emisor y vuelve a intentarlo.';render();
   }
   const selectOptions = (items,value) => items.map(item=>'<option value="'+esc(item.value)+'"'+(item.value===value?' selected':'')+'>'+esc(item.name)+'</option>').join('');
   const field = (label,html) => '<label class="field"><span>'+esc(label)+'</span>'+html+'</label>';
@@ -286,6 +290,7 @@ export function mountStudio(root,api,initial,isAdmin,openMenu) {
   const currentMode = state => modes.find(m=>m.value===state.mode) || modes[0];
   const temperatureAvailable = d => !['dry','fan'].includes(d.state.mode);
   const stateText = d => [currentMode(d.state).name,temperatureAvailable(d) ? d.state.temperature+' °C' : '',fanDescription(d.state.fan)].filter(Boolean).join(' · ');
+  function displayAccent(value) {return /^#[0-9a-f]{6}$/i.test(value||'')&&value.toLowerCase()!=='#b9c9b0'?value:'#f4f6f8';}
   function displayHTML(d,r,preview=false) {
     const s=d.state,f=r.fields || {},mode=currentMode(s),hasState=d.type==='stateful',temperature=hasState&&temperatureAvailable(d)?s.temperature:'—';
     const power=f.power ? '<span class="chip display-power'+(hasState?(s.power?' power-on':' power-off'):'')+'">'+glyph(hasState?(s.power?'power':'power-off'):'info')+(hasState?(s.power?'Encendido':'Apagado'):'Sin datos vinculados')+'</span>' : '';
@@ -293,7 +298,7 @@ export function mountStudio(root,api,initial,isAdmin,openMenu) {
     const fansPart=f.fan ? '<span class="display-item">'+glyph('fan')+'<span>'+esc(hasState?(fans.find(v=>v.value===s.fan)?.name || 'Automático'):'Ventilador —')+'</span></span>' : '';
     const swing=swingStates.find(option=>option.value===swingValue(s)),swingLabel=hasState?swingDescription(s):'Oscilación —';
     const swingPart=f.swing&&(!hasState||swing.value!=='off') ? '<span class="display-item" role="img" aria-label="'+esc(swingLabel)+'" title="'+esc(swingLabel)+'">'+glyph(hasState?swing.icon:'swing')+'<span class="display-long">'+esc(swingLabel)+'</span><span class="display-short">'+(hasState?swing.name:'Oscilación —')+'</span></span>' : '';
-    const accent=/^#[0-9a-f]{6}$/i.test(r.accent||'')?r.accent:'#b9c9b0';
+    const accent=displayAccent(r.accent);
     const width=clamp(r.width,3,6,3),height=clamp(r.height,2,4,2);
     const canEdit=!preview&&editing;
     const readings=ambientFor(d);
@@ -340,12 +345,13 @@ export function mountStudio(root,api,initial,isAdmin,openMenu) {
       (editing?'<div class="row-add-actions"><button class="btn" data-add-row>'+glyph('add-row')+'Añadir fila</button><button class="btn" data-add-element>'+glyph('plus')+'Añadir función</button></div>':'')+'</div>'+(d.type==='stateful'?stateCapturePanel(d):'');
   }
   function renderHome() {
-    app.innerHTML='<div class="page-head"><div class="identity"><div><h1>Emisores</h1><p class="muted">Tus mandos infrarrojos</p></div></div><button class="btn primary" data-add-emitter>'+glyph('plus')+'Añadir emisor</button></div><div class="stack">'+model.emitters.map(e=>'<section class="emitter-card"><div class="emitter-header"><div class="emitter-title">'+glyph('radio')+'<div><h2>'+esc(e.name)+'</h2><span class="muted small">'+esc(e.model)+'</span></div></div><div class="device-actions"><button class="btn text" data-add-device="'+esc(e.id)+'">'+glyph('plus')+'Añadir dispositivo</button><button class="icon-btn" data-emitter-menu="'+esc(e.id)+'" aria-label="Opciones de '+esc(e.name)+'">'+glyph('more')+'</button></div></div><div class="device-list">'+(e.devices.length?e.devices.map(d=>'<div class="device-item"><button class="device-open" data-open="'+esc(d.id)+'"><span class="device-icon">'+glyph(d.icon)+'</span><span class="device-info"><strong>'+esc(d.name)+'</strong><span class="muted small">'+(d.type==='stateful'?'Mando con ajustes':'Mando de botones')+'</span></span></button><button class="icon-btn" data-device-menu="'+esc(d.id)+'" aria-label="Opciones de '+esc(d.name)+'">'+glyph('more')+'</button></div>').join(''):'<p class="muted">Añade tu primer dispositivo.</p>')+'</div></section>').join('')+'</div>';
+    app.innerHTML='<div class="page-head"><div class="identity"><div><h1>Emisores</h1><p class="muted">Tus mandos infrarrojos</p></div></div><button class="btn primary" data-add-emitter>'+glyph('plus')+'Añadir emisor</button></div><div class="stack">'+model.emitters.map(e=>'<section class="emitter-card"><div class="emitter-header"><div class="emitter-title">'+glyph('radio')+'<div><h2>'+esc(e.name)+'</h2><span class="muted small">'+esc(e.model)+'</span></div></div><div class="device-actions"><button class="btn text" data-add-device="'+esc(e.id)+'">'+glyph('plus')+'Añadir dispositivo</button><button class="icon-btn" data-emitter-menu="'+esc(e.id)+'" aria-label="Opciones de '+esc(e.name)+'">'+glyph('more')+'</button></div></div><div class="device-list">'+(e.devices.length?e.devices.map(d=>'<div class="device-item"><button class="device-open" data-open="'+esc(d.id)+'"><span class="device-icon">'+glyph(d.icon)+'</span><span class="device-info"><strong>'+esc(d.name)+'</strong><span class="muted small">'+(d.type==='stateful'?'Mando con estados':'Mando de botones')+'</span></span></button><button class="icon-btn" data-device-menu="'+esc(d.id)+'" aria-label="Opciones de '+esc(d.name)+'">'+glyph('more')+'</button></div>').join(''):'<p class="muted">Añade tu primer dispositivo.</p>')+'</div></section>').join('')+'</div>';
   }
   function render() {
     if(view!=='home'&&!selected())view='home';
     ensureModelEntities();if(view==='home')renderHome();else renderRemote();
     if(saveFailed&&!app.querySelector('[data-save-failure]'))app.insertAdjacentHTML('afterbegin','<div class="warning" role="alert" data-save-failure><span aria-hidden="true">⚠</span><div><strong>No se han guardado los últimos cambios.</strong><p>Se ha recuperado la última configuración confirmada. Recarga el panel para continuar.</p><button type="button" class="btn" data-refresh-panel>Recargar panel</button></div></div>');
+    if(actionError&&!saveFailed)app.insertAdjacentHTML('afterbegin','<p class="action-error" role="alert" data-action-error>'+esc(actionError)+'</p>');
   }
   function getButton(d,id) {for(const r of d.rows){const i=r.cells?.findIndex(b=>b?.id===id);if(i>=0)return {row:r,index:i,button:r.cells[i]};}return null;}
   function stateCapturePanel(d) {
@@ -461,6 +467,7 @@ export function mountStudio(root,api,initial,isAdmin,openMenu) {
     render();
     return persist(async()=>{
       if(!transmit){toast(message);return true;}
+      if(!savedStateFor(d,state)?.signal){clearActionError();return false;}
       const result=await api.call('send_state',{device_id:d.id,state});
       if(disposed)return false;
       if(result.model){confirmedWire=copy(result.model);revision=result.revision;catalog=result.catalog||catalog;reconcileCanonical(model,result.model);}
@@ -514,7 +521,7 @@ export function mountStudio(root,api,initial,isAdmin,openMenu) {
   function newDevice(emitterId) {
     const e=model.emitters.find(v=>v.id===emitterId);if(!e)return;
     let kind='stateful';
-    showModal('Añadir dispositivo',field('Nombre del dispositivo','<input id="new-device-name" maxlength="70" placeholder="Por ejemplo, Split dormitorio">')+field('Icono','<select id="new-device-icon">'+selectOptions(deviceIcons,'wind')+'</select>')+'<div class="field"><span>Tipo de mando</span><div class="choice-grid"><button class="choice selected" data-kind="stateful">'+glyph('display')+'<strong>Mando con ajustes</strong><span class="muted small">Recuerda temperatura, modo y ventilación.</span></button><button class="choice" data-kind="simple">'+glyph('remote')+'<strong>Mando de botones</strong><span class="muted small">Cada botón reproduce una señal aprendida.</span></button></div></div><p class="small muted">'+esc(e.name)+'</p><p id="form-error" class="warning" hidden></p>',[{label:'Cancelar'},{label:'Crear',className:'primary',run:()=>{
+    showModal('Añadir dispositivo',field('Nombre del dispositivo','<input id="new-device-name" maxlength="70" placeholder="Por ejemplo, Split dormitorio">')+field('Icono','<select id="new-device-icon">'+selectOptions(deviceIcons,'wind')+'</select>')+'<div class="field"><span>Tipo de mando</span><div class="choice-grid"><button class="choice selected" data-kind="stateful">'+glyph('display')+'<strong>Mando con estados</strong><span class="muted small">Recuerda temperatura, modo y ventilación.</span></button><button class="choice" data-kind="simple">'+glyph('remote')+'<strong>Mando de botones</strong><span class="muted small">Cada botón reproduce una señal aprendida.</span></button></div></div><p class="small muted">'+esc(e.name)+'</p><p id="form-error" class="warning" hidden></p>',[{label:'Cancelar'},{label:'Crear',className:'primary',run:()=>{
       const name=$('#new-device-name').value.trim();if(!name){formError('Escribe un nombre para el dispositivo.');return;}
       const d=newRemote(name,$('#new-device-icon').value,kind);e.devices.push(d);model.selected=d.id;view='remote';editing=false;persist();closeModal();render();toast('Dispositivo creado en IR Pro.');
     }}],()=>{$$('[data-kind]',modalBody).forEach(b=>b.addEventListener('click',()=>{kind=b.dataset.kind;$$('[data-kind]',modalBody).forEach(c=>c.classList.toggle('selected',c===b));},{signal:modalAbort.signal}));});
@@ -570,9 +577,10 @@ export function mountStudio(root,api,initial,isAdmin,openMenu) {
   }
   function editDisplay(d,r,isNew=false) {
     const draft=copy(r);
+    draft.accent=displayAccent(draft.accent);
     const fields=[['temperature','Temperatura objetivo'],['mode','Modo'],['fan','Ventilador'],['swing','Oscilación'],['power','Encendido / apagado']];
     const preview=()=>{const target=$('#display-live');if(target)target.innerHTML=displayHTML(d,draft,true);};
-    showModal(isNew?'Añadir función':'Editar función','<div id="display-live" class="display-preview"></div>'+screenSizeControls(draft)+'<div class="form-grid">'+field('Estilo','<select id="display-style"><option value="lcd"'+(draft.style==='lcd'?' selected':'')+'>Pantalla LCD</option><option value="modern"'+(draft.style==='modern'?' selected':'')+'>Home Assistant</option></select>')+field('Color de la pantalla','<input type="color" id="display-color" value="'+esc(draft.accent||'#b9c9b0')+'">')+'</div><div class="field"><span>Información visible</span><div class="display-edit-fields">'+fields.map(([key,label])=>checkField(key,label,draft.fields[key])).join('')+'</div></div><p id="form-error" class="warning" hidden></p>',[{label:'Cancelar'},{label:isNew?'Añadir pantalla':'Guardar cambios',className:'primary',run:()=>{if(!Object.values(draft.fields).some(Boolean)){formError('Selecciona al menos un dato para la pantalla.');return;}if(isNew)d.rows.unshift(copy(draft));else Object.assign(r,copy(draft));persist();closeModal();render();toast('Pantalla actualizada.');}}],()=>{preview();wireScreenSizeControls(draft,preview);$('#display-style').addEventListener('change',event=>{draft.style=event.target.value;preview();},{signal:modalAbort.signal});$('#display-color').addEventListener('input',event=>{draft.accent=event.target.value;preview();},{signal:modalAbort.signal});$$('input[type=checkbox]',modalBody).forEach(input=>input.addEventListener('change',()=>{draft.fields[input.name]=input.checked;preview();},{signal:modalAbort.signal}));});
+    showModal(isNew?'Añadir función':'Editar función','<div id="display-live" class="display-preview"></div>'+screenSizeControls(draft)+'<div class="form-grid">'+field('Estilo','<select id="display-style"><option value="lcd"'+(draft.style==='lcd'?' selected':'')+'>Pantalla LCD</option><option value="modern"'+(draft.style==='modern'?' selected':'')+'>Home Assistant</option></select>')+field('Color de la pantalla','<input type="color" id="display-color" value="'+esc(draft.accent||'#f4f6f8')+'">')+'</div><div class="field"><span>Información visible</span><div class="display-edit-fields">'+fields.map(([key,label])=>checkField(key,label,draft.fields[key])).join('')+'</div></div><p id="form-error" class="warning" hidden></p>',[{label:'Cancelar'},{label:isNew?'Añadir pantalla':'Guardar cambios',className:'primary',run:()=>{if(!Object.values(draft.fields).some(Boolean)){formError('Selecciona al menos un dato para la pantalla.');return;}if(isNew)d.rows.unshift(copy(draft));else Object.assign(r,copy(draft));persist();closeModal();render();toast('Pantalla actualizada.');}}],()=>{preview();wireScreenSizeControls(draft,preview);$('#display-style').addEventListener('change',event=>{draft.style=event.target.value;preview();},{signal:modalAbort.signal});$('#display-color').addEventListener('input',event=>{draft.accent=event.target.value;preview();},{signal:modalAbort.signal});$$('input[type=checkbox]',modalBody).forEach(input=>input.addEventListener('change',()=>{draft.fields[input.name]=input.checked;preview();},{signal:modalAbort.signal}));});
   }
   function findEmpty(d) {for(const r of d.rows.filter(v=>v.type==='buttons')){const index=r.cells.indexOf(null);if(index>=0)return {row:r,index};}const r=row([null]);d.rows.push(r);return {row:r,index:0};}
   function chooseElement(d,placement) {
