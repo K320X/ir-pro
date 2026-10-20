@@ -395,6 +395,38 @@ class IRProManager:
         result = await self.async_press(record["id"], _expected_state=key)
         return {**result, **self.envelope()}
 
+    async def async_delete_saved_states(self, device_id: str, expected_revision: int) -> dict:
+        """Atomically forget only this remote's complete-state recordings."""
+        async with self._lock:
+            if self._closing:
+                raise IRProError("source_unavailable", "IR Pro se está recargando.")
+            if type(expected_revision) is not int or expected_revision != self.revision:
+                raise IRProError("revision_conflict", "La configuración ha cambiado en otra ventana. Recarga antes de guardar.")
+            _, original = self._find_device(device_id)
+            if original.get("studio", {}).get("type") != "stateful":
+                raise IRProError("invalid_model", "Este dispositivo no es un mando con estados.")
+            removed = {item["id"] for item in original["studio"]["savedStates"]}
+            if not removed:
+                # A previous committed deletion may still need registry cleanup.
+                await self.async_sync_entities()
+                return self.envelope()
+            model = deepcopy(self.model)
+            for emitter in model["emitters"]:
+                for device in emitter["devices"]:
+                    if device["id"] != device_id:
+                        continue
+                    device["studio"]["savedStates"] = []
+                    device["functions"] = [function for function in device["functions"] if function["key"] not in removed]
+                    for row in device["layout"]["rows"]:
+                        row["cells"] = [None if key in removed else key for key in row["cells"]]
+            referenced = {ref for emitter in model["emitters"] for device in emitter["devices"] for function in device["functions"] for ref in function["signal_refs"].values()}
+            records = {ref: deepcopy(record) for ref, record in self.signals.items() if ref in referenced or record["function_key"] not in removed}
+            revision = self.revision + 1
+            await self._write(model, records, revision)
+            self.model, self.signals, self.revision = model, records, revision
+            await self.async_sync_entities()
+            return self.envelope()
+
     async def async_press(self, function_key: str, desired: bool | None = None, *, _expected_state: tuple | None = None) -> dict:
         if desired is not None and type(desired) is not bool:
             raise IRProError("invalid_model", "El estado del botón de doble acción no es válido.")
@@ -415,11 +447,12 @@ class IRProManager:
             signal = "press" if function["type"] == "button" else ("on" if next_state else "off")
             record = self._record(function["signal_refs"][signal])
             sent_settings = deepcopy(state_record["settings"]) if state_record else None
+            sent_effect = deepcopy(function.get("state_effect"))
             sent_device_id, sent_source_id = device["id"], emitter["sourceId"]
             await self._remote_call(emitter["sourceId"], "send_command", record)
             async with self._lock:
                 current = self.find_function(function_key)
-                if current and (current[2]["type"] == "switch" or state_record):
+                if current and (current[2]["type"] == "switch" or state_record or sent_effect):
                     model = deepcopy(self.model)
                     state_updated = False
                     for e in model["emitters"]:
@@ -428,6 +461,9 @@ class IRProManager:
                                 if f["key"] == function_key:
                                     if f["type"] == "switch":
                                         f["on"] = bool(next_state)
+                                    if sent_effect and f.get("state_effect") == sent_effect and d["id"] == sent_device_id and e["sourceId"] == sent_source_id and d.get("studio", {}).get("type") == "stateful":
+                                        d["studio"]["state"].update(sent_effect)
+                                        state_updated = True
                             current_record = next((item for item in d.get("studio", {}).get("savedStates", []) if item["id"] == function_key), None)
                             if current_record and sent_settings is not None and d["id"] == sent_device_id and e["sourceId"] == sent_source_id and configuration_key(current_record["settings"]) == configuration_key(sent_settings):
                                 d["studio"]["state"].update(sent_settings)
@@ -436,7 +472,8 @@ class IRProManager:
                     await self._write(model, self.signals, revision)
                     self.model, self.revision = model, revision
                 self._notify()
-            return {"status": "sent_unconfirmed", "on": bool(next_state) if function["type"] == "switch" else None}
+            result = {"status": "sent_unconfirmed", "on": bool(next_state) if function["type"] == "switch" else None}
+            return {**result, **self.envelope()} if sent_effect else result
 
     async def async_register_platform(self, kind: str, add_entities: Callable, factory: Callable) -> None:
         self._platforms[kind] = (add_entities, factory)

@@ -3,7 +3,7 @@ import {readFileSync} from 'node:fs';
 import vm from 'node:vm';
 import {randomUUID} from 'node:crypto';
 import {styles} from '../custom_components/ir_pro/frontend/ir-pro-theme.js';
-import {exportModel} from '../custom_components/ir_pro/frontend/ir-pro-model.js';
+import {exportModel,importModel} from '../custom_components/ir_pro/frontend/ir-pro-model.js';
 import {icon as renderIcon} from '../custom_components/ir_pro/frontend/ir-pro-icons.js';
 
 // Execute the actual controller render functions. This catches reentrant routing
@@ -85,6 +85,44 @@ vm.createContext(captureContext);vm.runInContext(extract('stateCapturePanel'),ca
 const captureHTML=vm.runInContext('stateCapturePanel(d)',captureContext);
 assert.match(captureHTML,/data-learn-state>Aprender estado<\/button>/);
 assert.ok(!captureHTML.includes('Aprender este estado del mando original'));
+
+// Bulk deletion is a separate server operation. The confirmation does not edit
+// local rows, signals or entities, and only a canonical response replaces them.
+const bulkWire=structuredClone(wire),bulkDevice=bulkWire.emitters[0].devices[0];
+const savedId='saved-state',independentId='independent-option';
+const savedFunction={key:savedId,name:'Apagado',type:'button',entity:'button.split_apagado',icon:'power-off',color:'#ff8b80',showName:true,signals:{press:true},signal_refs:{press:'captured-state'},on:null};
+const independentFunction={key:independentId,name:'Oscilación',type:'button',entity:'button.split_oscilacion',icon:'swing',color:'#56c4ed',showName:true,signals:{press:true},signal_refs:{press:'captured-swing'},state_effect:{swing:'auto'},on:null};
+bulkDevice.functions.push(savedFunction,independentFunction);
+bulkDevice.studio.savedStates=[{id:savedId,name:'Apagado',entity:savedFunction.entity,settings:{power:false},signal:{kind:'learned',id:'captured-state'}}];
+bulkDevice.studio.rows[2].cells[1].sendMode='independent';bulkDevice.studio.rows[2].cells[1].independentActions=[{id:independentId,name:'Oscilación',type:'button',action:'learned',value:'auto',state_effect:{swing:'auto'}}];
+for(const key of [savedId,independentId])bulkDevice.layout.rows.push({id:'layout-'+key,columns:1,height:2,cells:[key]});
+const deletedWire=structuredClone(bulkWire);deletedWire.emitters[0].devices[0].studio.savedStates=[];deletedWire.emitters[0].devices[0].functions=deletedWire.emitters[0].devices[0].functions.filter(fn=>fn.key!==savedId);deletedWire.emitters[0].devices[0].layout.rows=deletedWire.emitters[0].devices[0].layout.rows.filter(row=>!row.cells.includes(savedId));
+let bulkDialog,bulkError='',bulkClosed=0,bulkRenders=0,bulkCalls=[],queuedRequest;
+const bulkContext={isAdmin:true,saveFailed:false,signalBusy:false,independentSending:false,disposed:false,revision:10,catalog:[],confirmedWire:structuredClone(bulkWire),model:importModel(bulkWire,bulkDevice.id),viewedSavedStateId:savedId,importModel,copy:structuredClone,validateDevice:()=>true,esc:String,glyph:()=>'',configurationLabel:()=> 'Apagado',configurationKey:JSON.stringify,showModal(title,body,buttons){bulkDialog={title,body,buttons};},queueRequest:action=>new Promise((resolve,reject)=>{queuedRequest=async()=>{try{resolve(await action());}catch(error){reject(error);}};}),api:{call:async(action,data)=>{bulkCalls.push([action,data]);return {revision:12,model:deletedWire,catalog:[{id:'updated'}]};}},closeModal(){bulkClosed++;},render(){bulkRenders++;},toast(){},formError(message){bulkError=message;}};
+vm.createContext(bulkContext);vm.runInContext(extract('deleteAllSavedStates')+'\n'+extract('stateTable'),bulkContext);bulkContext.d=bulkContext.model.emitters[0].devices[0];
+const bulkBefore=JSON.stringify(bulkContext.model);
+vm.runInContext('deleteAllSavedStates(d)',bulkContext);
+assert.deepEqual(Array.from(bulkDialog.buttons,button=>button.label),['Cancelar','Eliminar estados']);assert.equal(bulkCalls.length,0);assert.equal(JSON.stringify(bulkContext.model),bulkBefore);
+assert.match(bulkDialog.body,/class="warning" role="alert"/);assert.match(bulkDialog.body,/⚠/);assert.match(bulkDialog.body,/Eliminación definitiva/);assert.match(bulkDialog.body,/automatizaciones, scripts y paneles/);assert.match(bulkDialog.body,/no se puede deshacer/);assert.equal(bulkDialog.buttons[0].run,undefined);
+const tableWithBulk=vm.runInContext('stateTable(d,null)',bulkContext);assert.match(tableWithBulk,/<\/table>.*data-delete-all-states/s);
+bulkContext.isAdmin=false;assert.ok(!vm.runInContext('stateTable(d,null)',bulkContext).includes('data-delete-all-states'));bulkContext.isAdmin=true;
+const deleting=bulkDialog.buttons[1].run();assert.equal(JSON.stringify(bulkContext.model),bulkBefore);assert.equal(bulkCalls.length,0);
+bulkContext.revision=11;await queuedRequest();await deleting;
+assert.equal(bulkCalls.length,1);assert.equal(bulkCalls[0][0],'delete_saved_states');assert.equal(bulkCalls[0][1].device_id,bulkDevice.id);assert.equal(bulkCalls[0][1].expected_revision,11);
+assert.equal(bulkClosed,1);assert.equal(bulkRenders,1);assert.equal(bulkContext.viewedSavedStateId,null);assert.equal(bulkContext.revision,12);assert.equal(bulkContext.model.selected,bulkDevice.id);
+const afterBulk=exportModel(bulkContext.model).emitters[0].devices[0];
+assert.equal(afterBulk.studio.savedStates.length,0);assert.deepEqual(afterBulk.studio.rows,JSON.parse(bulkBefore).emitters[0].devices[0].rows);
+const canonicalFunctions=functions=>functions.map(fn=>[fn.key,fn.entity,fn.signal_refs,fn.state_effect]).sort(([left],[right])=>left.localeCompare(right));
+assert.deepEqual(canonicalFunctions(afterBulk.functions),canonicalFunctions(deletedWire.emitters[0].devices[0].functions));
+assert.equal(vm.runInContext('stateTable(model.emitters[0].devices[0],null)',bulkContext),'');
+
+// A conflict or an unconfirmed response must leave the original states visible.
+for(const response of [new Error('La configuración ha cambiado. Recarga el panel.'),{}]){
+ bulkContext.model=importModel(bulkWire,bulkDevice.id);bulkContext.d=bulkContext.model.emitters[0].devices[0];bulkContext.viewedSavedStateId=savedId;bulkError='';
+ bulkContext.api.call=async()=>{if(response instanceof Error)throw response;return response;};
+ vm.runInContext('deleteAllSavedStates(d)',bulkContext);const pending=bulkDialog.buttons[1].run();await queuedRequest();await pending;
+ assert.equal(JSON.stringify(bulkContext.model),bulkBefore);assert.equal(bulkContext.viewedSavedStateId,savedId);assert.equal(bulkClosed,1);assert.ok(bulkError);assert.equal(bulkContext.saveFailed,false);
+}
 
 // Unknown combinations prepare the UI without a request. An unexpected backend
 // invalid_signal for an apparently learned state must remain a real inline error.

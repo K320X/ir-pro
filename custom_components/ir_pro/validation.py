@@ -6,7 +6,7 @@ from typing import Any
 from uuid import NAMESPACE_URL, uuid5
 
 from .errors import IRProError
-from .studio import STUDIO_ICONS, validate_studio
+from .studio import STUDIO_ICONS, validate_state_effect, validate_studio
 
 ICONS = {
     "droplets", "power", "snowflake", "fan", "volume-2", "sun", "lightbulb",
@@ -208,6 +208,15 @@ def validate_model(
                     "signals": signals, "signal_refs": refs,
                     "on": prior[1].get("on") if prior and kind == "switch" else None,
                 }
+                effect = raw_function.get("state_effect", prior[1].get("state_effect") if prior else None)
+                if "state_effect" in raw_function or effect is not None:
+                    effect = validate_state_effect(effect)
+                    if kind != "button":
+                        _fail("Solo una entidad button puede tener una acción independiente.")
+                    old_effect = prior[1].get("state_effect") if prior else None
+                    if prior and (old_effect is not None and old_effect != effect or old_effect is None and prior[1]["signal_refs"]):
+                        _fail("El efecto de una señal existente se conserva. Crea otra función para cambiarlo.")
+                    function["state_effect"] = effect
                 device["functions"].append(function)
             device["layout"] = _layout(raw_device.get("layout"), [f["key"] for f in device["functions"]], device_id)
             previous_studio = old_devices.get(device_id, (None, {}))[1].get("studio")
@@ -216,6 +225,8 @@ def validate_model(
             elif previous_studio is not None:
                 # Older clients must not silently erase the visual editor.
                 device["studio"] = validate_studio(previous_studio, device["functions"], ICONS, previous_studio)
+            if any("state_effect" in function for function in device["functions"]) and device.get("studio", {}).get("type") != "stateful":
+                _fail("Las acciones independientes necesitan un mando con estados.")
             emitter["devices"].append(device)
         emitters.append(emitter)
     if sum(len(d["functions"]) for e in emitters for d in e["devices"]) > 1500:

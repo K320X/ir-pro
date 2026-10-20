@@ -102,6 +102,15 @@ async def ws_send_state(hass, connection, msg):
     await _run(hass, connection, msg, lambda m: m.async_send_state(msg["device_id"], msg["state"]))
 
 
+@websocket_api.websocket_command({
+    "type": "ir_pro/delete_saved_states", probatio.Required("device_id"): str,
+    probatio.Required("expected_revision"): int,
+})
+@websocket_api.async_response
+async def ws_delete_saved_states(hass, connection, msg):
+    await _run(hass, connection, msg, lambda m: m.async_delete_saved_states(msg["device_id"], msg["expected_revision"]))
+
+
 def async_register(hass) -> None:
-    for command in (ws_get, ws_subscribe, ws_save, ws_learn, ws_test_signal, ws_confirm_signal, ws_press, ws_send_state):
+    for command in (ws_get, ws_subscribe, ws_save, ws_learn, ws_test_signal, ws_confirm_signal, ws_press, ws_send_state, ws_delete_saved_states):
         websocket_api.async_register_command(hass, command)

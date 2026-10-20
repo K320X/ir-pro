@@ -1,6 +1,6 @@
-import {icon} from './ir-pro-icons.js?v=0.2.0b5';
-import {importModel,exportModel,reconcileCanonical,independentStateEffect} from './ir-pro-model.js?v=0.2.0b5';
-import {mountIconPickers} from './ir-pro-pickers.js?v=0.2.0b5';
+import {icon} from './ir-pro-icons.js?v=0.2.0b6';
+import {importModel,exportModel,reconcileCanonical,independentStateEffect} from './ir-pro-model.js?v=0.2.0b6';
+import {mountIconPickers} from './ir-pro-pickers.js?v=0.2.0b6';
 export function mountStudio(root,api,initial,isAdmin,openMenu) {
   const scope=root.getRootNode(),lifecycle=new AbortController();
   let disposed=false,catalog=initial.catalog||[],revision=initial.revision||0,saveQueue=Promise.resolve(true),saveFailed=false,actionError='',signalBusy=false,independentSending=false,operation=0,pendingSaves=0,unsubscribe=null,lastAmbientSnapshot='',deferredEnvelope=null,scrollGeneration=0,inputGeneration=0,lastRenderedRoute='';
@@ -431,7 +431,7 @@ export function mountStudio(root,api,initial,isAdmin,openMenu) {
     return '<table class="state-table" aria-label="Estados y entidades"><thead><tr><th scope="col">Estado</th><th scope="col">Entidad</th></tr></thead><tbody>'+records.map(record=>{
       const active=record.id===current?.id,label=record.name||configurationLabel(record.settings);
       return '<tr'+(active?' class="is-current"':'')+'><td><button type="button" class="state-table-select" data-view-saved-state="'+esc(record.id)+'"'+(active?' aria-current="true"':'')+' aria-label="Ver estado '+esc(label)+'">'+esc(label)+'</button></td><td><div class="state-table-entity"><code>'+esc(record.entity)+'</code><button type="button" class="icon-btn state-copy" data-copy-state-entity="'+esc(record.id)+'" aria-label="Copiar entidad '+esc(record.entity)+'" title="Copiar entidad">'+glyph('copy')+'</button></div></td></tr>';
-    }).join('')+'</tbody></table>';
+    }).join('')+'</tbody></table>'+(isAdmin?'<div class="state-capture-actions"><button type="button" class="btn danger" data-delete-all-states>'+glyph('trash')+'Borrar todos los estados</button></div>':'');
   }
   function proposedStateEntity(d,name,id) {
     const stem='button.'+entitySlug([emitterFor(d.id)?.name,d.name,name].filter(Boolean).join('_'));
@@ -506,6 +506,22 @@ export function mountStudio(root,api,initial,isAdmin,openMenu) {
       {label:'Cancelar'},{label:'Eliminar estado y entidad',className:'danger',run:()=>{d.savedStates=d.savedStates.filter(item=>item.id!==id);persist();closeModal();render();toast('Estado y entidad eliminados de IR Pro.');}}
     ]);
   }
+  function deleteAllSavedStates(d) {
+    if(!isAdmin||saveFailed||!(d.savedStates||[]).length)return;
+    if(signalBusy||independentSending){toast('Espera a que termine la operación en curso.');return;}
+    showModal('Borrar todos los estados','<p>'+esc(d.name)+'</p><div class="warning" role="alert"><span aria-hidden="true">⚠</span><div><strong>Eliminación definitiva.</strong><p>Se eliminarán todos los estados guardados de este mando, sus señales aprendidas y sus entidades. Las automatizaciones, scripts y paneles que utilicen estas entidades dejarán de ejecutar estas funciones. Esta acción no se puede deshacer.</p></div></div><p id="form-error" class="warning" role="alert" hidden></p>',[
+      {label:'Cancelar'},{label:'Eliminar estados',className:'danger',run:async()=>{
+        try{
+          const result=await queueRequest(()=>api.call('delete_saved_states',{device_id:d.id,expected_revision:revision}));
+          if(disposed)return;
+          if(!result?.model||!Number.isInteger(result.revision))throw new Error('No se ha podido confirmar la eliminación. Recarga el panel para comprobar los estados.');
+          revision=result.revision;catalog=result.catalog||catalog;confirmedWire=copy(result.model);
+          model=importModel(result.model,model.selected);model.emitters.forEach(emitter=>emitter.devices.forEach(validateDevice));
+          viewedSavedStateId=null;closeModal();render();toast('Estados y entidades eliminados.');
+        }catch(error){if(!disposed)formError(error.message||'No se han podido eliminar los estados.');}
+      }}
+    ]);
+  }
   function viewSavedState(d,id) {
     const record=(d.savedStates||[]).find(item=>item.id===id);if(!record)return;
     viewedSavedStateId=record.id;
@@ -544,15 +560,23 @@ export function mountStudio(root,api,initial,isAdmin,openMenu) {
     if(independentSending){toast('Espera a que termine el envío.');return false;}
     const effect=independentStateEffect(b);
     if(!effect||b.signals?.press!==true||!b.signal_refs?.press){toast('Sin señal. Aprende esta opción al editar la carpeta.');return false;}
-    const key=b.id,name=b.name;
+    const key=b.id,name=b.name,sourceId=emitterFor(d.id)?.sourceId;
     independentSending=true;
     try{return await queuePhysical(async()=>{
       const result=await api.call('press',{function_key:key});
       if(disposed)return false;
-      if(result.model){confirmedWire=copy(result.model);revision=result.revision;catalog=result.catalog||catalog;reconcileCanonical(model,result.model);}
-      // A successful independent command changes only its declared setting.
-      // The backend persists this effect as part of press, without send_state.
-      Object.assign(d.state,effect);render();toast('Señal enviada · '+name+' · Estado estimado');return true;
+      if(Object.hasOwn(result||{},'model')){
+        const emitter=result.model?.emitters?.find(item=>item.sourceId===sourceId&&item.devices?.some(device=>device.id===d.id));
+        const state=emitter?.devices.find(device=>device.id===d.id)?.studio?.state;
+        if(!Number.isInteger(result.revision)||!state||typeof state.power!=='boolean'||!modes.some(option=>option.value===state.mode)||!Number.isInteger(state.temperature)||state.temperature<18||state.temperature>30||!fans.some(option=>option.value===state.fan)||!swingStates.some(option=>option.value===state.swing))throw new Error('No se ha podido confirmar el estado del mando. Recarga el panel antes de continuar.');
+        const canonical=importModel(result.model,model.selected);
+        if(!canonical.emitters.every(item=>item.devices.every(validateDevice)))throw new Error('No se ha podido confirmar la configuración del mando. Recarga el panel antes de continuar.');
+        confirmedWire=copy(result.model);revision=result.revision;catalog=result.catalog||catalog;model=canonical;
+        // Another client can change settings or remove the action during send.
+        // The returned state is authoritative; never reapply the old effect.
+        d.state=copy(state);
+      }else Object.assign(d.state,effect);
+      render();toast('Señal enviada · '+name+' · Estado estimado');return true;
     });}finally{independentSending=false;}
   }
   async function executeAction(d,b) {
@@ -897,6 +921,7 @@ export function mountStudio(root,api,initial,isAdmin,openMenu) {
     const target=event.target.closest('button');if(!target||target.disabled)return;
     if(Date.now()<suppressClickUntil){event.preventDefault();return;}
     if(target.hasAttribute('data-refresh-panel')){window.location.reload();return;}
+    if(independentSending){toast('Espera a que termine el envío.');return;}
     if(saveFailed&&!target.hasAttribute('data-home')&&!target.dataset.open&&!target.dataset.copyStateEntity){toast('Recarga el panel para continuar con la configuración confirmada.');return;}
     if(!isAdmin&&!target.dataset.open&&!target.dataset.button&&!target.hasAttribute('data-home')&&!target.dataset.viewSavedState&&!target.dataset.copyStateEntity){toast('Necesitas permisos de administrador para editar IR Pro.');return;}
     if(target.hasAttribute('data-home')){view='home';editing=false;render();return;}
@@ -911,6 +936,7 @@ export function mountStudio(root,api,initial,isAdmin,openMenu) {
     if(target.dataset.relearnState){learnState(d,target.dataset.relearnState);return;}
     if(target.dataset.clearStateSignal){clearStateSignal(d,target.dataset.clearStateSignal);return;}
     if(target.dataset.deleteSavedState){deleteSavedState(d,target.dataset.deleteSavedState);return;}
+    if(target.hasAttribute('data-delete-all-states')){deleteAllSavedStates(d);return;}
     if(target.dataset.viewSavedState){viewSavedState(d,target.dataset.viewSavedState);return;}
     if(target.dataset.copyStateEntity){void copySavedStateEntity(d,target.dataset.copyStateEntity);return;}
     if(target.hasAttribute('data-edit')){editing=!editing;render();return;}

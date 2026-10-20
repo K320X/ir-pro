@@ -33,6 +33,7 @@ class WebSocketTests(unittest.IsolatedAsyncioTestCase):
             async_confirm_signal=AsyncMock(return_value={"verified": True}),
             async_press=AsyncMock(return_value={"status": "sent_unconfirmed"}),
             async_send_state=AsyncMock(return_value={"status": "sent_unconfirmed"}),
+            async_delete_saved_states=AsyncMock(return_value={"revision": 2}),
             async_add_listener=Mock(return_value=Mock()),
         )
         self.hass = SimpleNamespace(data={"ir_pro": {"manager": self.manager}})
@@ -52,6 +53,7 @@ class WebSocketTests(unittest.IsolatedAsyncioTestCase):
             (self.websocket.ws_confirm_signal, {"signal_ref": "reference"}, "async_confirm_signal"),
             (self.websocket.ws_press, {"function_key": "function"}, "async_press"),
             (self.websocket.ws_send_state, {"device_id": "device", "state": {"power": False}}, "async_send_state"),
+            (self.websocket.ws_delete_saved_states, {"device_id": "device", "expected_revision": 1}, "async_delete_saved_states"),
         ]
 
     async def test_no_operation_is_available_without_authenticated_user(self):
@@ -105,6 +107,15 @@ class WebSocketTests(unittest.IsolatedAsyncioTestCase):
         connection = self.connection(admin=True)
         await self.websocket.ws_press(self.hass, connection, {"id": 12, "function_key": "function", "on": False})
         self.manager.async_press.assert_awaited_once_with("function", desired=False)
+
+    async def test_bulk_state_deletion_passes_device_and_revision_without_hardware(self):
+        connection = self.connection(admin=True)
+        await self.websocket.ws_delete_saved_states(self.hass, connection, {"id": 14, "device_id": "device", "expected_revision": 7})
+        self.manager.async_delete_saved_states.assert_awaited_once_with("device", 7)
+        connection.send_result.assert_called_once_with(14, {"revision": 2})
+        self.manager.async_press.assert_not_awaited()
+        self.manager.async_send_state.assert_not_awaited()
+        self.manager.async_learn.assert_not_awaited()
 
     async def test_authenticated_subscription_only_reads_and_can_unsubscribe(self):
         connection = self.connection()

@@ -67,7 +67,8 @@ assert.equal(run("proposedEntitySuffix(device,{name:'Posición 1',state_effect:{
 // Execute the actual action path. An unknown option makes no request; a failed
 // press never changes the display. Success applies exactly one field while off.
 let calls=[],fail=false,renders=0,errors=0;
-const runtime={independentStateEffect,independentSending:false,signalBusy:false,disposed:false,model:{},confirmedWire:{},revision:0,catalog:[],copy:structuredClone,reconcileCanonical(){},render(){renders++;},toast(){},api:{call:async(action,data)=>{calls.push([action,data]);if(fail)throw new Error('IR unavailable');return {};}},queuePhysical:async action=>{try{return await action();}catch{errors++;return false;}}};
+let validatedDevices=0,validConfiguration=true;
+const runtime={independentStateEffect,independentSending:false,signalBusy:false,disposed:false,model:importModel(wire,device.id),confirmedWire:{},revision:0,catalog:[],modes:run('modes'),fans:run('fans'),swingStates:run('swingStates'),emitterFor:()=>({sourceId:'broadlink-source'}),copy:structuredClone,importModel,validateDevice(){validatedDevices++;return validConfiguration;},render(){renders++;},toast(){},api:{call:async(action,data)=>{calls.push([action,data]);if(fail)throw new Error('IR unavailable');return {};}},queuePhysical:async action=>{try{return await action();}catch{errors++;return false;}}};
 vm.createContext(runtime);vm.runInContext(extract('executeIndependent'),runtime);
 runtime.d=structuredClone(device);runtime.b=structuredClone(fanAuto);
 const before=structuredClone(runtime.d.state);runtime.b.signals.press=false;
@@ -96,6 +97,36 @@ releasePress({});assert.equal(await pendingPress,true);assert.equal(runtime.inde
 const afterSuccess=structuredClone(runtime.d.state),failedPress=vm.runInContext('executeIndependent(d,b)',runtime);
 assert.equal(runtime.independentSending,true);rejectPress(new Error('IR unavailable'));
 assert.equal(await failedPress,false);assert.equal(runtime.independentSending,false);assert.deepEqual(runtime.d.state,afterSuccess);assert.equal(snapshots,0);
+
+// Canonical state can include another client's changes, or omit the old effect
+// if its action was deleted while sending. Never replay an effect over it.
+const serverState={power:true,mode:'heat',temperature:28,fan:'high',swing:'position_3'};
+const canonicalResponse=(state,removeAction=false)=>{
+ const response={revision:20,model:structuredClone(wire)},target=response.model.emitters[0].devices[0];
+ target.studio.state=structuredClone(state);
+ target.studio.rows.push({id:'row-from-another-client',type:'display',height:3,width:4,style:'modern',accent:'#f4f6f8',fields:{temperature:true}});
+ if(removeAction){target.functions=target.functions.filter(fn=>fn.key!==fanAuto.id);target.studio.rows[0].cells[0].independentActions=target.studio.rows[0].cells[0].independentActions.filter(node=>node.id!==fanAuto.id);for(const row of target.layout.rows)row.cells=row.cells.map(key=>key===fanAuto.id?null:key);}
+ return response;
+};
+runtime.api.call=async()=>canonicalResponse(serverState);
+assert.equal(await vm.runInContext('executeIndependent(d,b)',runtime),true);
+assert.deepEqual(runtime.d.state,serverState);assert.equal(runtime.revision,20);assert.equal(runtime.model.selected,device.id);assert.equal(validatedDevices,1);
+assert.deepEqual(runtime.model.emitters[0].devices[0].state,serverState);assert.ok(runtime.model.emitters[0].devices[0].rows.some(row=>row.id==='row-from-another-client'));
+const stateAfterDeletion={power:false,mode:'dry',temperature:23,fan:'low',swing:'off'};
+runtime.api.call=async()=>canonicalResponse(stateAfterDeletion,true);
+assert.equal(await vm.runInContext('executeIndependent(d,b)',runtime),true);
+assert.deepEqual(runtime.d.state,stateAfterDeletion);assert.equal(runtime.d.state.fan,'low','The removed action must not reapply fan:auto');
+const current=runtime.model.emitters[0].devices[0];assert.equal(current.rows[0].cells[0].independentActions.some(node=>node.id===fanAuto.id),false);
+assert.equal(exportModel(runtime.model).emitters[0].devices[0].functions.some(fn=>fn.key===fanAuto.id),false,'The next save cannot resurrect a concurrently deleted action');
+assert.ok(!JSON.stringify(exportModel(runtime.model)).includes('captured-fan-auto'));
+const canonicalBefore=JSON.stringify(runtime.confirmedWire);
+for(const invalid of [{model:null,revision:21},canonicalResponse({...serverState,fan:'invalid'}),{model:{version:2,emitters:[]},revision:21}]){
+ runtime.api.call=async()=>invalid;
+ assert.equal(await vm.runInContext('executeIndependent(d,b)',runtime),false);assert.equal(runtime.independentSending,false);
+ assert.deepEqual(runtime.d.state,stateAfterDeletion);assert.equal(JSON.stringify(runtime.confirmedWire),canonicalBefore);
+}
+validConfiguration=false;runtime.api.call=async()=>canonicalResponse(serverState);
+assert.equal(await vm.runInContext('executeIndependent(d,b)',runtime),false);assert.equal(JSON.stringify(runtime.confirmedWire),canonicalBefore);assert.deepEqual(runtime.model.emitters[0].devices[0].state,stateAfterDeletion);validConfiguration=true;
 
 // Opening an independent folder renders trusted availability without creating
 // options, learning, saving or transmitting. Only an explicit choice may execute.

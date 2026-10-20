@@ -33,13 +33,17 @@ This repository is installed as a custom HACS repository; it is not listed in th
 
 Changes are stored in Home Assistant, not in browser storage. Transmitter selection uses stable entity registry IDs. Renaming a remote or function does not automatically change an existing entity ID.
 
-## Remotes with settings
+## Remotes with states
 
 When creating a device, choose **Mando con estados** for equipment such as an air conditioner that sends its complete configuration in an IR message. The editable starting layout includes a display, mode, one combined on/off button, five fan speeds with automatic mode, temperature controls, six swing positions with oscillation and disabled options, and a light button. Every element can be edited or removed. Existing layouts are preserved. Fan folders can be configured for two to five speeds.
 
-To learn a state, first prepare the settings in IR Pro and on the physical remote. Select **Aprender este estado del mando original**. For an on state, start with the physical remote off, point it at the transmitter and press **Encender** with the intended settings. For the off state, press **Apagar**. A temperature or fan key may not include the instruction to turn the appliance on. Save after the signal is received. Each learned state appears in the state/entity table as a real `button` entity. The off state is independent of temperature, mode, fan and swing. Copy the entity ID to use it in automations.
+To learn a state, first prepare the settings in IR Pro and on the physical remote. Select **Aprender estado**. For an on state, start with the physical remote off, point it at the transmitter and press **Encender** with the intended settings. For the off state, press **Apagar**. A temperature or fan key may not include the instruction to turn the appliance on. Save after the signal is received. Each learned state appears in the state/entity table as a real `button` entity. The off state is independent of temperature, mode, fan and swing. Copy the entity ID to use it in automations.
 
 Changing a setting can send its matching learned state; IR Pro does not guess or synthesize unknown IR protocols. If the combination has no learned signal, it must be learned before it can control the appliance. Preparing temperature, mode, fan or swing while the remote is off does not turn the appliance on. Loading, saving, duplicating and restarting never send IR automatically.
+
+Official mode, fan and swing folders can use **Ajustes del mando** to select a complete learned state, or **Acción independiente** to learn one separate command per option. Independent options have their own entities and signals; after a successful send, only their declared setting changes in the estimated display. Unlearned options remain disabled. Use this mode only for commands that actually affect that setting alone. Complete-state recordings still match their original mode, temperature, fan and swing exactly; selecting an independent folder does not reinterpret existing recordings.
+
+Use **Borrar todos los estados** below the state/entity table to permanently remove the remote's complete-state recordings and their IR Pro entities together. The transmitter, remote layout, ordinary buttons and independent options remain. Automations using removed entities will no longer execute those functions. A confirmation warning is shown before deletion.
 
 The display shows the remote's estimated settings, not confirmation from the appliance. Available temperature and humidity readings from the transmitter's Home Assistant device are shown separately as room measurements. Missing or unavailable measurements are omitted.
 

@@ -51,6 +51,17 @@ def _boolean(value: Any, label: str) -> bool:
     return value
 
 
+def validate_state_effect(value: Any) -> dict:
+    """An independent command may declare exactly one absolute setting."""
+    if not isinstance(value, dict) or len(value) != 1:
+        _fail("La acción independiente debe cambiar un único ajuste.")
+    field, setting = next(iter(value.items()))
+    allowed = {"mode": MODES, "fan": FANS, "swing": SWINGS}
+    if not isinstance(field, str) or field not in allowed or not isinstance(setting, str) or setting not in allowed[field]:
+        _fail("El ajuste de la acción independiente no es válido.")
+    return {field: setting}
+
+
 def validate_configuration(value: Any, *, full: bool = False) -> dict:
     """Normalize a command state. Off is one command, not many hidden presets."""
     if not isinstance(value, dict) or type(value.get("power")) is not bool:
@@ -119,6 +130,10 @@ def sync_studio(studio: dict, functions: list[dict]) -> None:
             node["signal_refs"] = deepcopy(function["signal_refs"])
             node["signals"] = deepcopy(function["signals"])
             node["on"] = function.get("on")
+            if "state_effect" in function:
+                node["state_effect"] = deepcopy(function["state_effect"])
+            else:
+                node.pop("state_effect", None)
             if saved:
                 reference = function["signal_refs"].get("press")
                 node["signal"] = {"kind": "learned", "id": reference} if reference and function["signals"].get("press") else None
@@ -130,6 +145,8 @@ def sync_studio(studio: dict, functions: list[dict]) -> None:
         for child in node.get("children", []):
             if isinstance(child, dict):
                 apply(child)
+        for child in node.get("independentActions", []):
+            apply(child)
 
     for row in studio["rows"]:
         for node in row.get("cells", []):
@@ -147,6 +164,18 @@ def validate_studio(value: Any, functions: list[dict], icons: set[str], current:
     studio = {"type": value["type"], "state": validate_configuration(value.get("state"), full=True),
               "rows": [], "savedStates": []}
     indexed = {function["key"]: function for function in functions}
+    previous_nodes: dict[str, dict] = {}
+
+    def remember_previous(node: dict) -> None:
+        previous_nodes[node["id"]] = node
+        for child in (*node.get("children", []), *node.get("independentActions", [])):
+            if isinstance(child, dict):
+                remember_previous(child)
+
+    for row in (current or {}).get("rows", []):
+        for item in row.get("cells", []):
+            if item:
+                remember_previous(item)
     used: set[str] = set()
     count = 0
 
@@ -180,13 +209,14 @@ def validate_studio(value: Any, functions: list[dict], icons: set[str], current:
         result.update(action=kind, value=value)
         return result
 
-    def node(raw: Any, depth: int = 0) -> dict:
+    def node(raw: Any, depth: int = 0, *, independent: bool = False) -> dict:
         nonlocal count
         count += 1
         if depth > 4 or count > 1500 or not isinstance(raw, dict):
             _fail("El editor contiene demasiadas funciones o niveles.")
         result = action(raw)
         result.update(id=identity(raw.get("id")), type=raw.get("type", "button"))
+        previous = previous_nodes.get(result["id"], {})
         if result["type"] not in ("button", "dual", "group"):
             _fail("El tipo de función del editor no es válido.")
         if result["type"] == "dual":
@@ -201,6 +231,10 @@ def validate_studio(value: Any, functions: list[dict], icons: set[str], current:
                 _fail("El contenido de la carpeta no es válido.")
             result["group"] = kind
             result["action"] = "open_group"
+            send_mode = raw.get("sendMode", previous.get("sendMode", "settings"))
+            if send_mode not in ("settings", "independent") or (studio["type"] == "simple" and send_mode != "settings"):
+                _fail("El tipo de envío de la carpeta no es válido.")
+            result["sendMode"] = send_mode
             if kind == "custom":
                 children = raw.get("children", [])
                 if not isinstance(children, list) or len(children) > 100:
@@ -223,6 +257,23 @@ def validate_studio(value: Any, functions: list[dict], icons: set[str], current:
             required = "switch" if result["type"] == "dual" else "button"
             if not function or function["type"] != required:
                 _fail("Una función del editor no corresponde a una entidad real de este mando.")
+        effect = existing_function.get("state_effect") if existing_function else None
+        if "state_effect" in raw and validate_state_effect(raw["state_effect"]) != effect:
+            _fail("El efecto del editor no corresponde a su función real.")
+        if effect is not None:
+            if studio["type"] != "stateful" or result["type"] != "button" or result["action"] != "learned":
+                _fail("Una acción independiente debe ser un botón aprendido de un mando con estados.")
+            result["state_effect"] = deepcopy(effect)
+        if independent and (effect is None or result["type"] != "button" or result["action"] != "learned" or result["value"] != next(iter(effect.values()))):
+            _fail("La opción independiente no coincide con el ajuste de su señal.")
+        retained = raw.get("independentActions", previous.get("independentActions", []))
+        if not isinstance(retained, list) or len(retained) > 100 or (retained and (studio["type"] != "stateful" or independent)):
+            _fail("Las acciones independientes de la carpeta no son válidas.")
+        if retained or "independentActions" in raw or "independentActions" in previous:
+            result["independentActions"] = [node(child, depth + 1, independent=True) for child in retained]
+            effects = [tuple(child["state_effect"].items()) for child in result["independentActions"]]
+            if len(effects) != len(set(effects)):
+                _fail("Hay opciones independientes repetidas en esta carpeta.")
         return result
 
     rows = value.get("rows")
@@ -260,6 +311,8 @@ def validate_studio(value: Any, functions: list[dict], icons: set[str], current:
         function = indexed.get(identity_value)
         if not function or function["type"] != "button":
             _fail("El estado guardado no corresponde a una entidad button de este mando.")
+        if "state_effect" in function:
+            _fail("Una acción independiente no puede representar un estado completo.")
         settings = validate_configuration(raw.get("settings"))
         if identity_value in previous and configuration_key(previous[identity_value]["settings"]) != configuration_key(settings):
             _fail("Los ajustes de un estado guardado se conservan. Crea otro estado para cambiarlos.")
