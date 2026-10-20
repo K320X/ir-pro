@@ -126,9 +126,6 @@ class FakeDeviceRegistry:
         self.removed.append(device_id)
         self.entries.pop(device_id, None)
 
-    def async_remove(self, device_id):
-        self.async_remove_device(device_id)
-
     def async_get_or_create(self, **kwargs):
         existing = next((
             device for device in self.entries.values()

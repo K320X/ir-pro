@@ -310,6 +310,46 @@ class StudioManagerTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("broadlink_device", self.hass.dr.entries)
         self.assertEqual(self.hass.services.calls, [])
 
+    async def test_orphaned_virtual_device_cleanup_uses_current_api_and_allows_future_saves(self):
+        await self.prepare()
+        self.assertFalse(hasattr(self.hass.dr, "async_remove"))
+        self.hass.dr.entries["old_virtual_device"] = SimpleNamespace(
+            id="old_virtual_device", config_entry_id=self.entry.entry_id,
+            identifiers={("ir_pro", "removed-remote")},
+        )
+        self.hass.dr.entries["shared_virtual_device"] = SimpleNamespace(
+            id="shared_virtual_device", config_entry_id=self.entry.entry_id,
+            identifiers={("ir_pro", "shared-remote")},
+        )
+        self.hass.er.entities["button.orphan_ir_function"] = SimpleNamespace(
+            id="orphan-function-registry", entity_id="button.orphan_ir_function",
+            device_id="old_virtual_device", config_entry_id=self.entry.entry_id,
+            platform="ir_pro", unique_id="removed-function", domain="button",
+        )
+        self.hass.er.entities["sensor.unrelated"] = SimpleNamespace(
+            id="unrelated-sensor", entity_id="sensor.unrelated",
+            device_id="shared_virtual_device", config_entry_id="other-entry",
+            platform="other", unique_id="unrelated", domain="sensor",
+        )
+        original = deepcopy(get_function(self.manager.model))
+        candidate = self.manager.envelope()["model"]
+        get_studio(candidate)["state"]["temperature"] = 21
+        first = await self.manager.async_save_model(candidate, self.manager.revision)
+        self.assertEqual(get_studio(first["model"])["state"]["temperature"], 21)
+        self.assertNotIn("old_virtual_device", self.hass.dr.entries)
+        self.assertIn("old_virtual_device", self.hass.dr.removed)
+        self.assertIn("button.orphan_ir_function", self.hass.er.removed)
+        self.assertIn("broadlink_device", self.hass.dr.entries)
+        self.assertIn("shared_virtual_device", self.hass.dr.entries)
+        self.assertIn("sensor.unrelated", self.hass.er.entities)
+        self.assertEqual(get_function(self.manager.model), original)
+        candidate = self.manager.envelope()["model"]
+        get_studio(candidate)["state"]["temperature"] = 20
+        second = await self.manager.async_save_model(candidate, self.manager.revision)
+        self.assertEqual(get_studio(second["model"])["state"]["temperature"], 20)
+        self.assertEqual(get_function(self.manager.model)["signal_refs"], {"press": REF})
+        self.assertEqual(self.hass.services.calls, [])
+
     def add_sensor(self, entity_id, kind, value, unit, *, device="broadlink_device"):
         self.hass.er.entities[entity_id] = SimpleNamespace(
             id="registry-" + entity_id, entity_id=entity_id, device_id=device,

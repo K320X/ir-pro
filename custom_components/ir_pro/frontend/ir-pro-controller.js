@@ -1,6 +1,6 @@
-import {icon} from './ir-pro-icons.js?v=0.2.0b1';
-import {importModel,exportModel,reconcileCanonical} from './ir-pro-model.js?v=0.2.0b1';
-import {mountIconPickers} from './ir-pro-pickers.js?v=0.2.0b1';
+import {icon} from './ir-pro-icons.js?v=0.2.0b2';
+import {importModel,exportModel,reconcileCanonical} from './ir-pro-model.js?v=0.2.0b2';
+import {mountIconPickers} from './ir-pro-pickers.js?v=0.2.0b2';
 export function mountStudio(root,api,initial,isAdmin,openMenu) {
   const scope=root.getRootNode(),lifecycle=new AbortController();
   let disposed=false,catalog=initial.catalog||[],revision=initial.revision||0,saveQueue=Promise.resolve(true),saveFailed=false,signalBusy=false,operation=0,pendingSaves=0,unsubscribe=null;
@@ -331,7 +331,7 @@ export function mountStudio(root,api,initial,isAdmin,openMenu) {
       '<div class="stepper"><span>Altura</span><button class="icon-btn" data-height="'+esc(r.id)+'" data-delta="-1" aria-label="Reducir altura"'+(height<=(screen?2:1)?' disabled':'')+'>'+glyph('minus')+'</button><b>'+(screen?height-1:height)+'</b><button class="icon-btn" data-height="'+esc(r.id)+'" data-delta="1" aria-label="Aumentar altura"'+(height>=4?' disabled':'')+'>'+glyph('plus')+'</button></div><button class="icon-btn" data-delete-row="'+esc(r.id)+'" aria-label="Eliminar fila">'+glyph('trash')+'</button></div></div>';
   }
   function renderRemote() {
-    const d=selected();if(!d){view='home';render();return;}
+    const d=selected();if(!d){view='home';renderHome();return;}
     const e=emitterFor(d.id);
     app.innerHTML='<div class="page-head"><div class="identity"><button class="btn text" data-home>'+glyph('arrow-left')+'Emisores</button><div><h1>'+esc(d.name)+'</h1><p class="muted">'+esc(e?.name || '')+'</p></div></div><div class="page-actions">'+(editing?'<button class="btn text" data-device-settings>'+glyph('pencil')+'Nombre e icono</button>':'')+'<button class="btn'+(editing?' primary':'')+'" data-edit>'+glyph(editing?'check':'settings')+(editing?'Listo':'Editar mando')+'</button></div></div>'+
       (editing?'<div class="editor-note">'+glyph('move')+'<span>Arrastra los botones para colocarlos. Pulsa un elemento para editarlo.</span></div>':'')+
@@ -343,8 +343,9 @@ export function mountStudio(root,api,initial,isAdmin,openMenu) {
     app.innerHTML='<div class="page-head"><div class="identity"><div><h1>Emisores</h1><p class="muted">Tus mandos infrarrojos</p></div></div><button class="btn primary" data-add-emitter>'+glyph('plus')+'Añadir emisor</button></div><div class="stack">'+model.emitters.map(e=>'<section class="emitter-card"><div class="emitter-header"><div class="emitter-title">'+glyph('radio')+'<div><h2>'+esc(e.name)+'</h2><span class="muted small">'+esc(e.model)+'</span></div></div><div class="device-actions"><button class="btn text" data-add-device="'+esc(e.id)+'">'+glyph('plus')+'Añadir dispositivo</button><button class="icon-btn" data-emitter-menu="'+esc(e.id)+'" aria-label="Opciones de '+esc(e.name)+'">'+glyph('more')+'</button></div></div><div class="device-list">'+(e.devices.length?e.devices.map(d=>'<div class="device-item"><button class="device-open" data-open="'+esc(d.id)+'"><span class="device-icon">'+glyph(d.icon)+'</span><span class="device-info"><strong>'+esc(d.name)+'</strong><span class="muted small">'+(d.type==='stateful'?'Mando con ajustes':'Mando de botones')+'</span></span></button><button class="icon-btn" data-device-menu="'+esc(d.id)+'" aria-label="Opciones de '+esc(d.name)+'">'+glyph('more')+'</button></div>').join(''):'<p class="muted">Añade tu primer dispositivo.</p>')+'</div></section>').join('')+'</div>';
   }
   function render() {
+    if(view!=='home'&&!selected())view='home';
     ensureModelEntities();if(view==='home')renderHome();else renderRemote();
-    if(saveFailed)app.insertAdjacentHTML('afterbegin','<div class="warning" role="alert"><span aria-hidden="true">⚠</span><div><strong>No se han guardado los últimos cambios.</strong><p>Se ha recuperado la última configuración confirmada. Recarga el panel para continuar.</p><button type="button" class="btn" data-refresh-panel>Recargar panel</button></div></div>');
+    if(saveFailed&&!app.querySelector('[data-save-failure]'))app.insertAdjacentHTML('afterbegin','<div class="warning" role="alert" data-save-failure><span aria-hidden="true">⚠</span><div><strong>No se han guardado los últimos cambios.</strong><p>Se ha recuperado la última configuración confirmada. Recarga el panel para continuar.</p><button type="button" class="btn" data-refresh-panel>Recargar panel</button></div></div>');
   }
   function getButton(d,id) {for(const r of d.rows){const i=r.cells?.findIndex(b=>b?.id===id);if(i>=0)return {row:r,index:i,button:r.cells[i]};}return null;}
   function stateCapturePanel(d) {
@@ -891,7 +892,7 @@ export function mountStudio(root,api,initial,isAdmin,openMenu) {
   if(api.subscribe)Promise.resolve(api.subscribe(receiveEnvelope)).then(stop=>{if(disposed)stop?.();else unsubscribe=stop;}).catch(()=>{});
   render();
   return {
-    hassChanged(){if(disposed||modal.open||editing)return;const d=selected();if(d&&view==='remote')renderRemote();},
+    hassChanged(){if(disposed||modal.open||editing)return;const d=selected();if(d&&view==='remote')render();},
     dispose(){disposed=true;operation++;unsubscribe?.();modalAbort?.abort();lifecycle.abort();clearTimeout(toastTimer);clearDrag();clearTouchDrag();for(const entry of Array.from(landingGhosts))finishTouchLanding(entry);if(modal.open)modal.close();if(entityModal.open)entityModal.close();}
   };
 }

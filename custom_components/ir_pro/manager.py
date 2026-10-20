@@ -463,7 +463,7 @@ class IRProManager:
             ours = [identifier for domain, identifier in device.identifiers if domain == DOMAIN]
             if ours and not any(identity in wanted_devices for identity in ours):
                 if not any(entity.device_id == device.id and entity.platform != DOMAIN for entity in self.registry.entities.values()):
-                    device_registry.async_remove(device.id)
+                    device_registry.async_remove_device(device.id)
         for emitter in self.model["emitters"]:
             source = self.registry.async_get(emitter["sourceId"])
             for device in emitter["devices"]:

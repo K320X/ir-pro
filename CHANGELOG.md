@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.0b2
+
+- Fix repeated save failures after deleting a remote by using Home Assistant's current device registry removal API.
+- Keep one consistent error banner when a failed save restores a configuration without the newly selected device.
+- Use dark text (#0f1721) on primary action buttons for better contrast.
+- Add regression coverage for removed-device cleanup and error rendering.
+
 ## 0.2.0b1
 
 - Add remotes with adjustable settings, configurable displays, folders and dual-action buttons.
