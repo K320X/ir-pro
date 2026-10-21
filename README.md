@@ -4,7 +4,7 @@
 
 Visual infrared remotes for Home Assistant.
 
-**1.0.0 stable** includes editable remotes, air conditioner and television starting layouts, displays and learned states. IR Pro starts empty: it does not import demo remotes, modify your existing scripts or take over physical devices. Upgrading preserves existing remotes, learned signals and entity identifiers.
+**1.0.1 stable** includes editable remotes, air conditioner and television starting layouts, displays and learned states. IR Pro starts empty: it does not import demo remotes, modify your existing scripts or take over physical devices. Upgrading preserves existing remotes, learned signals and entity identifiers.
 
 Build your own remotes with buttons, dual actions, folders, optional labels, icon previews, colors and independent grid rows. Learn commands from a physical remote, save them directly and expose real Home Assistant entities for automations. Testing a signal is optional.
 
@@ -14,7 +14,7 @@ Requires Home Assistant **2026.10 or later**, HACS and a supported Broadlink rem
 
 1. Open **HACS → menu → Custom repositories**.
 2. Add `https://github.com/K320X/ir-pro` with type **Integration**.
-3. Open **IR Pro** and download the latest stable release. Prereleases are not required for version 1.0.0.
+3. Open **IR Pro** and download the latest stable release. Prereleases are not required for stable versions.
 4. Restart Home Assistant.
 5. Go to **Settings → Devices & services → Add integration → IR Pro**.
 6. Open **IR Pro** in the sidebar. Select **Añadir emisor** to start.
@@ -32,6 +32,12 @@ This repository is installed as a custom HACS repository; it is not listed in th
 5. Find the function's entity under **Entidad para automatizaciones**. It can be used by Home Assistant automations and scripts.
 
 Changes are stored in Home Assistant, not in browser storage. Transmitter selection uses stable entity registry IDs. Renaming a remote or function does not automatically change an existing entity ID.
+
+The function editor allows changes to existing controls, including controls supplied by a starting layout. Adding state controls or a display to a television remote enables its internal state profile without replacing its other controls. Cosmetic edits preserve entity IDs and learned signals. A change of function type or command meaning that requires replacement shows the affected entities before saving; replacement functions must learn their own signals. Canceling keeps the saved remote unchanged.
+
+Use the pencil beside **Entidad** to change an existing identifier. The entity domain (`button.` or `switch.`) stays fixed. A confirmed rename preserves its unique identity and learned signals. Update automations, scripts and dashboards that use the old identifier. The new identifier is applied only after saving the function and confirming the warning; an occupied identifier can be corrected in the editor.
+
+A learned dual-action control exposes one `switch` entity with two separately captured signals. Action 1 uses `switch.turn_on` and Action 2 uses `switch.turn_off`, both targeting that same entity. Each invocation sends its signal once; there is no continuous transmission. A dual control can also combine a state-setting action with a separately learned action; that learned side has its own `button` entity and advances the visible action only after a successful send.
 
 ## Starting layouts
 
@@ -61,7 +67,7 @@ The display shows the remote's estimated settings, not confirmation from the app
 - Many air conditioner remotes send the full configuration in one message. Use a remote with settings and learn complete states for those appliances. A simple learned “temperature up” key can otherwise replay a fixed temperature, mode and fan setting.
 - Duplicating preserves layout and presentation. Signals can be reused on the same transmitter. A copy created under another transmitter must learn its signals there; copying a flag cannot transfer Broadlink's stored codes.
 - Existing remotes cannot be moved between transmitters. Create a copy at its destination so the original entities remain intact.
-- Existing entity IDs and entity types cannot be changed. Choose them when creating a function; visible names remain editable.
+- Entity IDs can be renamed with confirmation. Changing a function's entity type requires replacing the function and reviewing automations that use its old entity.
 - Removing a function or remote is permanent. References in automations, scripts or dashboards must be reviewed. Removing an emitter from IR Pro does not remove the physical Broadlink integration.
 - Deletion removes IR Pro metadata and its own entities. Previously learned commands remain in Broadlink's storage; deleted functions can no longer call them through IR Pro.
 - The management panel requires administrator access. Normal entity use follows Home Assistant permissions.

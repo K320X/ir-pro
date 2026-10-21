@@ -65,7 +65,7 @@ export function independentStateEffect(node) {
 }
 const nodes=device=>{
   const result=[];
-  const visit=node=>{if(!node)return;result.push(node);if(node.type==='group'&&node.group==='custom')(node.children||[]).forEach(visit);(node.independentActions||[]).forEach(visit);};
+  const visit=node=>{if(!node)return;result.push(node);if(node.type==='group'&&node.group==='custom')(node.children||[]).forEach(visit);(node.independentActions||[]).forEach(visit);(node.learnedActions||[]).forEach(visit);};
   (device.rows||[]).filter(row=>row.type==='buttons').forEach(row=>(row.cells||[]).forEach(visit));
   return result;
 };
@@ -114,8 +114,8 @@ export function exportModel(model) {
       functions.push({key:node.id,name:node.name,showName:node.showName!==false,icon:node.icon||'remote',color:node.color||'#56c4ed',type:old?.type||type,entity:old?.entity||node.entity,signals:{},signal_refs:clone(refs||{}),on:old?.on??null,...(effect?{state_effect:effect}:{})});
     };
     for(const node of nodes(device)) {
-      if(node.type==='button'&&(device.type==='simple'||node.action==='learned'))add(node,'button',node.signal_refs||{});
-      else if(node.type==='dual'&&(device.type==='simple'||node._existingType==='switch'))add(node,'switch',node.signal_refs||{});
+      if(node.type==='button'&&node.action==='learned')add(node,'button',node.signal_refs||{});
+      else if(node.type==='dual'&&(node._existingType==='switch'||(!(node.learnedActions||[]).length&&node.actions?.length===2&&node.actions.every(side=>side.action==='learned'))))add(node,'switch',node.signal_refs||{});
     }
     for(const record of device.savedStates||[])add(record,'button',record.signal?.kind==='learned'?{press:record.signal.id}:record.signal_refs||{});
     const studio={type:device.type,state:clone(device.state),rows:clone(device.rows),savedStates:clone(device.savedStates||[]).map(record=>({...record,signal_refs:record.signal?.kind==='learned'?{press:record.signal.id}:record.signal_refs||{}}))};
@@ -137,7 +137,7 @@ export function reconcileCanonical(model,wire,requested) {
     for(const node of nodes(target)){const fn=canonical.get(node.id);if(fn){node.entity=fn.entity;node._existingType=fn.type;node.on=fn.on;
       if(independentStateEffect(fn))node.state_effect=clone(fn.state_effect);
       if(!expected||JSON.stringify(node.signal_refs||{})===JSON.stringify(expected.get(node.id)?.signal_refs||{})){node.signal_refs=clone(fn.signal_refs||{});node.signals=clone(fn.signals||{});}
-      if(node.type==='dual'&&target.type==='simple')node.activeSide=fn.on===true?1:0;
+      if(node.type==='dual'&&fn.type==='switch')node.activeSide=fn.on===true?1:0;
     }}
     for(const record of target.savedStates||[]){const fn=canonical.get(record.id);if(fn){record.entity=fn.entity;if(!expected||(record.signal?.id||null)===(expected.get(record.id)?.signal_refs?.press||null)){record.signal_refs=clone(fn.signal_refs||{});record.signal=fn.signals?.press&&fn.signal_refs?.press?{kind:'learned',id:fn.signal_refs.press}:null;}}}
   }

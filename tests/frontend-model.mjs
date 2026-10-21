@@ -77,3 +77,46 @@ assert.deepEqual(controlledStateFields(scopedDevice),['mode','temperature','fan'
 const noPower={id:'no-power',controlled_fields:controlledStateFields(scopedDevice),settings:projectState(scopedDevice.state,controlledStateFields(scopedDevice))};assert.ok(!Object.hasOwn(noPower.settings,'power'));scopedDevice.savedStates=[noPower];assert.equal(findSavedState(scopedDevice)?.id,'no-power');scopedDevice.state.power=true;assert.equal(findSavedState(scopedDevice)?.id,'no-power');
 scopedDevice.rows[0].cells.push({type:'button',action:'temp_up',sendMode:'independent'},...['mode','fan','swing'].map(group=>({type:'group',group,sendMode:'independent'})));assert.deepEqual(controlledStateFields(scopedDevice),[]);assert.equal(findSavedState(scopedDevice),undefined);
 console.log('Scoped climate captures exclude independent folders, preserve eight signals and legacy semantics, and match only an unambiguous active scope.');
+
+// A mixed dual control owns a separate learned button for its learned side;
+// its linked side and its visual parent never create phantom HA entities.
+const mixedModel=structuredClone(stateModel),mixedDevice=mixedModel.emitters[0].devices[0];
+mixedDevice.savedStates=[];mixedDevice._functions=[];
+const mixedControl={id:'mixed-parent',type:'dual',name:'Mixto',icon:'power',color:'#56c4ed',showName:true,action:'learned',activeSide:1,signal_refs:{on:'old-on',off:'old-off'},actions:[{name:'Luz',icon:'light',color:'#fff8ad',showName:true,action:'learned',value:''},{name:'Apagar',icon:'power-off',color:'#ff8b80',showName:true,action:'power_off',value:''}],learnedActions:[{id:'mixed-learned',type:'button',action:'learned',action_index:0,name:'Luz',icon:'light',color:'#fff8ad',showName:true,value:'',entity:'button.mixed_luz',signal_refs:{press:'mixed-reference'},signals:{press:true}}]};
+mixedDevice.rows=[{id:'mixed-row',type:'buttons',columns:1,height:1,cells:[mixedControl]}];
+for(const type of ['simple','stateful']){
+ mixedDevice.type=type;
+ const mixedWire=exportModel(mixedModel),wireDevice=mixedWire.emitters[0].devices[0];
+ assert.deepEqual(wireDevice.functions.map(item=>[item.key,item.type,item.entity,item.signal_refs]),[['mixed-learned','button','button.mixed_luz',{press:'mixed-reference'}]]);
+ assert.ok(!Object.hasOwn(wireDevice.functions[0],'state_effect'));
+ assert.deepEqual(wireDevice.layout.rows.flatMap(row=>row.cells).filter(Boolean),['mixed-learned']);
+ wireDevice.functions[0].signals={press:true};
+ const hydrated=importModel(mixedWire),hydratedDevice=hydrated.emitters[0].devices[0],hydratedParent=hydratedDevice.rows[0].cells[0],hydratedChild=hydratedParent.learnedActions[0];
+ assert.equal(hydratedDevice.rows.length,1,'A learned dual child is represented, never duplicated into a legacy row');
+ assert.equal(hydratedParent.activeSide,1);
+ assert.equal(hydratedChild.entity,'button.mixed_luz');assert.equal(hydratedChild._existingType,'button');
+ assert.deepEqual(hydratedChild.signal_refs,{press:'mixed-reference'});assert.equal(hydratedChild.signals.press,true);
+ assert.deepEqual(exportModel(hydrated).emitters[0].devices[0].functions,wireDevice.functions.map(item=>({...item,signals:{}})));
+ const requested=exportModel(hydrated),ack=structuredClone(mixedWire);ack.emitters[0].devices[0].functions[0].entity='button.mixed_luz_2';
+ hydratedChild.signal_refs.press='newer-mixed-reference';reconcileCanonical(hydrated,ack,requested);
+ assert.equal(hydratedChild.entity,'button.mixed_luz_2');assert.equal(hydratedChild.signal_refs.press,'newer-mixed-reference');
+ reconcileCanonical(hydrated,ack);assert.equal(hydratedChild.signal_refs.press,'mixed-reference');
+}
+
+// Fully learned dual controls remain a single two-command switch, even when a
+// formerly simple TV gains state controls. Existing IDs and captures survive.
+const tvWire=structuredClone(legacy),tvWireDevice=tvWire.emitters[0].devices[0];
+tvWireDevice.functions=[fn('tv-power','switch',{on:'tv-on',off:'tv-off'}),...Array.from({length:16},(_,index)=>fn('tv-button-'+index,'button',{press:'tv-ref-'+index}))];
+tvWireDevice.studio={type:'simple',state:{power:false,mode:'cool',temperature:24,fan:'auto',swing:'off'},savedStates:[],rows:tvWireDevice.functions.map(item=>({id:'row-'+item.key,type:'buttons',columns:1,height:1,cells:[{id:item.key,type:item.type==='switch'?'dual':'button',name:item.name,showName:true,icon:'power',color:'#56c4ed',action:'learned',...(item.type==='switch'?{actions:[{name:'Encender',action:'learned'},{name:'Apagar',action:'learned'}]}:{})}]}))};
+const tvPromoted=importModel(tvWire),promotedDevice=tvPromoted.emitters[0].devices[0];promotedDevice.type='stateful';
+const promotedWire=exportModel(tvPromoted),promotedFunctions=promotedWire.emitters[0].devices[0].functions;
+assert.equal(promotedFunctions.length,17);assert.equal(promotedFunctions.filter(item=>item.type==='switch').length,1);
+assert.deepEqual(promotedFunctions.map(item=>[item.key,item.entity,item.type,item.signal_refs,item.on]),tvWireDevice.functions.map(item=>[item.key,item.entity,item.type,item.signal_refs,item.on]));
+const phaseAck=structuredClone(promotedWire);phaseAck.emitters[0].devices[0].functions[0].on=false;
+reconcileCanonical(tvPromoted,phaseAck);assert.equal(promotedDevice.rows[0].cells[0].activeSide,0,'Canonical switch phase is reconciled for promoted remotes too');
+const freshDual=structuredClone(mixedModel),freshDualDevice=freshDual.emitters[0].devices[0],freshDualControl=freshDualDevice.rows[0].cells[0];
+freshDualControl.actions[1].action='learned';delete freshDualControl.learnedActions;freshDualControl.entity='switch.new_dual';freshDualControl.signal_refs={};
+for(const type of ['simple','stateful']){freshDualDevice.type=type;assert.deepEqual(exportModel(freshDual).emitters[0].devices[0].functions.map(item=>[item.key,item.type]),[['mixed-parent','switch']]);}
+freshDualDevice.type='simple';freshDualControl.type='button';freshDualControl.action='power_on';
+assert.equal(exportModel(freshDual).emitters[0].devices[0].functions.length,0,'A linked action has no learned entity just because its remote was simple');
+console.log('Mixed dual learned children, canonical reconciliation and promoted TV switch identities passed.');

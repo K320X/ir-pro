@@ -5,6 +5,7 @@ import {randomUUID} from 'node:crypto';
 import {styles} from '../custom_components/ir_pro/frontend/ir-pro-theme.js';
 import {exportModel,importModel,STATE_FIELDS,controlledStateFields,recordStateFields,projectState,stateRecordMatches,findSavedState,independentStateEffect} from '../custom_components/ir_pro/frontend/ir-pro-model.js';
 import {icon as renderIcon} from '../custom_components/ir_pro/frontend/ir-pro-icons.js';
+import './frontend-control-editor.mjs';
 
 // Execute the actual controller render functions. This catches reentrant routing
 // after a failed creation; a separate implementation of render would miss it.
@@ -107,7 +108,7 @@ assert.match(learningTarget.innerHTML,/Encender · Acción 1/);assert.match(lear
 assert.match(learningTarget.innerHTML,/data-signal="on"/);assert.match(learningTarget.innerHTML,/data-signal="off"/);assert.ok(!learningTarget.innerHTML.includes('data-signal="press"'));
 const powerCalls=[];
 const tvRuntime={d:restoredTV,b:restoredTV.rows[0].cells[1],independentSending:false,signalBusy:false,disposed:false,dualStateIndex:(d,b)=>b.activeSide===1?1:0,dualPowerLinked:()=>false,dualActions:b=>b.actions,queuePhysical:async action=>action(),api:{call:async(action,data)=>{powerCalls.push([action,data]);return {on:data.on};}},render(){},toast(){}};
-vm.createContext(tvRuntime);vm.runInContext(extract('executeAction'),tvRuntime);
+vm.createContext(tvRuntime);vm.runInContext(extract('learnedActionFor')+'\n'+extract('executeAction'),tvRuntime);
 assert.equal(await vm.runInContext('executeAction(d,b)',tvRuntime),true);assert.equal(tvRuntime.b.activeSide,1);
 assert.equal(await vm.runInContext('executeAction(d,b)',tvRuntime),true);assert.equal(tvRuntime.b.activeSide,0);
 assert.deepEqual(powerCalls.map(([action,data])=>[action,data.function_key,data.on]),[['press',tvPower.id,true],['press',tvPower.id,false]]);

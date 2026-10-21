@@ -175,7 +175,7 @@ genericRuntime.api={call:async(action,data)=>{
  for(const fn of target.functions)fn.signals=Object.fromEntries(Object.keys(fn.signal_refs||{}).map(key=>[key,true]));
  return {model:next,revision:++genericRevision};
 }};
-vm.createContext(genericRuntime);vm.runInContext(extract('adoptCommandEnvelope')+'\n'+extract('executeIndependent')+'\n'+extract('executeAction')+'\n'+extract('commitState'),genericRuntime);
+vm.createContext(genericRuntime);vm.runInContext(['adoptCommandEnvelope','executeIndependent','learnedActionFor','executeAction','commitState'].map(extract).join('\n'),genericRuntime);
 const pressDual=async()=>{genericRuntime.d=genericRuntime.model.emitters[0].devices[0];genericRuntime.b=genericRuntime.d.rows[1].cells[1];return vm.runInContext('executeAction(d,b)',genericRuntime);};
 assert.equal(await pressDual(),true);assert.equal(genericRuntime.model.emitters[0].devices[0].state.power,true);assert.equal(genericCalls[0][1].function_key,powerChildren[0].id);
 assert.equal(await pressDual(),true);assert.equal(genericRuntime.model.emitters[0].devices[0].state.power,false);assert.equal(genericCalls[1][1].function_key,powerChildren[1].id);
@@ -230,7 +230,7 @@ const settingsRuntime={model:settingsFixture(),independentSending:false,disposed
  if(responseChange==='phase')dual.activeSide=1;
  return {revision:++genericRevision,model:next};
 }}};
-vm.createContext(settingsRuntime);vm.runInContext(['adoptCommandEnvelope','commitState','executeAction'].map(extract).join('\n'),settingsRuntime);
+vm.createContext(settingsRuntime);vm.runInContext(['adoptCommandEnvelope','commitState','learnedActionFor','executeAction'].map(extract).join('\n'),settingsRuntime);
 const pressSettingsDual=async()=>{settingsRuntime.d=settingsRuntime.model.emitters[0].devices[0];settingsRuntime.b=settingsRuntime.d.rows[1].cells[1];return vm.runInContext('executeAction(d,b)',settingsRuntime);};
 const detachedDual=settingsRuntime.model.emitters[0].devices[0].rows[1].cells[1];assert.equal(await pressSettingsDual(),true);assert.equal(detachedDual.activeSide,0);assert.equal(settingsRuntime.model.emitters[0].devices[0].rows[1].cells[1].activeSide,1);assert.deepEqual(phaseSaves,[1]);
 assert.equal(await pressSettingsDual(),true);assert.equal(settingsRuntime.model.emitters[0].devices[0].rows[1].cells[1].activeSide,0);assert.deepEqual(phaseSaves,[1,0]);assert.equal(settingsRuntime.model.emitters[0].devices[0].state.temperature,24);

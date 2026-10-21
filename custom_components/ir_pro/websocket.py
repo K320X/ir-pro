@@ -52,10 +52,11 @@ async def ws_subscribe(hass, connection, msg):
 @websocket_api.websocket_command({
     "type": "ir_pro/save", probatio.Required("model"): dict,
     probatio.Required("expected_revision"): int,
+    probatio.Optional("entity_renames"): dict,
 })
 @websocket_api.async_response
 async def ws_save(hass, connection, msg):
-    await _run(hass, connection, msg, lambda m: m.async_save_model(msg["model"], msg["expected_revision"]))
+    await _run(hass, connection, msg, lambda m: m.async_save_model(msg["model"], msg["expected_revision"], **({"entity_renames": msg["entity_renames"]} if "entity_renames" in msg else {})))
 
 
 @websocket_api.websocket_command({

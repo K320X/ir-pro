@@ -16,8 +16,8 @@ from homeassistant.helpers.storage import Store
 
 from .const import DOMAIN, EMPTY_MODEL, LEARN_TIMEOUT, STORAGE_KEY, STORAGE_VERSION, VERSION
 from .errors import IRProError
-from .validation import signal_is_learned, validate_model
-from .studio import (active_controlled_fields, apply_state_effect, independent_action_owner, record_configuration_key, record_fields,
+from .validation import ENTITY, signal_is_learned, validate_model
+from .studio import (active_controlled_fields, apply_state_effect, independent_action_owner, learned_action_owner, learned_action_signature, record_configuration_key, record_fields,
                      scoped_configuration_key, sync_studio, validate_configuration,
                      validate_controlled_fields)
 
@@ -44,6 +44,7 @@ class IRProManager:
         self._unsubs: list[Callable] = []
         self._operations: set[asyncio.Task] = set()
         self._closing = False
+        self._entity_rename_pending = False
 
     @property
     def registry(self):
@@ -99,6 +100,8 @@ class IRProManager:
 
     def _refresh_entity_ids(self) -> None:
         """Respect renames made in HA's entity registry."""
+        if self._entity_rename_pending:
+            return
         for emitter in self.model["emitters"]:
             for device in emitter["devices"]:
                 for function in device["functions"]:
@@ -231,15 +234,62 @@ class IRProManager:
         self._unsubs.append(self.hass.bus.async_listen(EVENT_STATE_CHANGED, changed))
         self._unsubs.append(self.hass.bus.async_listen("entity_registry_updated", changed))
 
-    async def async_save_model(self, candidate: dict, expected_revision: int) -> dict:
+    def _prepare_entity_renames(self, candidate: dict, renames: dict | None) -> tuple[dict, list[tuple[str, str, str]]]:
+        """Allow only explicit existing-function renames, before any side effects."""
+        if renames is None or renames == {}:
+            return self.model, []
+        if not isinstance(renames, dict) or len(renames) > 1500:
+            raise IRProError("invalid_model", "Los cambios de entidades no son válidos.")
+        if not isinstance(candidate, dict):
+            raise IRProError("invalid_model", "La configuración no es válida.")
+        incoming = {}
+        emitters = candidate.get("emitters", [])
+        for emitter in emitters if isinstance(emitters, list) else []:
+            devices = emitter.get("devices", []) if isinstance(emitter, dict) else []
+            for device in devices if isinstance(devices, list) else []:
+                functions = device.get("functions", []) if isinstance(device, dict) else []
+                for function in functions if isinstance(functions, list) else []:
+                    if isinstance(function, dict) and isinstance(function.get("key"), str):
+                        incoming.setdefault(function["key"], []).append(function)
+        rebased = deepcopy(self.model)
+        current = {function["key"]: function for emitter in rebased["emitters"] for device in emitter["devices"] for function in device["functions"]}
+        updates = []
+        for key, target in renames.items():
+            old = current.get(key) if isinstance(key, str) else None
+            requested = incoming.get(key, []) if isinstance(key, str) else []
+            if old is None or len(requested) != 1 or requested[0].get("type") != old["type"]:
+                raise IRProError("invalid_model", "Solo se puede cambiar la entidad de una función existente del mismo tipo.")
+            if not isinstance(target, str) or not ENTITY.fullmatch(target) or not target.startswith(old["type"] + ".") or requested[0].get("entity") != target:
+                raise IRProError("invalid_model", "El nombre de entidad debe conservar button. o switch. y usar un identificador válido.")
+            occupied = self.registry.async_get(target)
+            if occupied and not (occupied.platform == DOMAIN and occupied.unique_id == key and occupied.config_entry_id == self.entry.entry_id):
+                raise IRProError("invalid_model", "La entidad elegida ya está en uso. Escribe otro identificador.")
+            registered = self.registry.async_get_entity_id(old["type"], DOMAIN, key)
+            if registered:
+                entry = self.registry.async_get(registered)
+                if not entry or entry.config_entry_id != self.entry.entry_id:
+                    raise IRProError("invalid_model", "La entidad no pertenece a esta integración de IR Pro.")
+                if registered != target:
+                    updates.append((registered, target, key))
+            old["entity"] = target
+        return rebased, updates
+
+    def _rollback_entity_renames(self, updates: list[tuple[str, str, str]]) -> None:
+        for previous, target, key in reversed(updates):
+            entry = self.registry.async_get(target)
+            if entry and entry.platform == DOMAIN and entry.unique_id == key and entry.config_entry_id == self.entry.entry_id:
+                self.registry.async_update_entity(target, new_entity_id=previous)
+
+    async def async_save_model(self, candidate: dict, expected_revision: int, *, entity_renames: dict | None = None) -> dict:
         async with self._lock:
             if self._closing:
                 raise IRProError("source_unavailable", "IR Pro se está recargando.")
             if type(expected_revision) is not int or expected_revision != self.revision:
                 raise IRProError("revision_conflict", "La configuración ha cambiado en otra ventana. Recarga antes de guardar.")
             self._refresh_entity_ids()
+            validation_current, registry_renames = self._prepare_entity_renames(candidate, entity_renames)
             model, notices = validate_model(
-                candidate, self.model, {source["id"] for source in self.catalog()},
+                candidate, validation_current, {source["id"] for source in self.catalog()},
                 self.signals, set(self.registry.entities),
             )
             # Old drafts are never a source of trusted signals or estimated state.
@@ -256,7 +306,23 @@ class IRProManager:
                 )
             }
             revision = self.revision + 1
-            await self._write(model, records, revision)
+            applied = []
+            self._entity_rename_pending = bool(registry_renames)
+            try:
+                for change in registry_renames:
+                    applied.append(change)
+                    self.registry.async_update_entity(change[0], new_entity_id=change[1])
+                await self._write(model, records, revision)
+            except BaseException as err:
+                try:
+                    self._rollback_entity_renames(applied)
+                except Exception as rollback_error:
+                    raise IRProError("storage_error", "No se ha podido restaurar el nombre de la entidad. Revisa el registro de entidades antes de volver a guardar.") from rollback_error
+                if isinstance(err, Exception) and not isinstance(err, IRProError):
+                    raise IRProError("storage_error", "No se ha podido guardar el cambio de entidad.") from err
+                raise
+            finally:
+                self._entity_rename_pending = False
             self.model, self.signals, self.revision = model, records, revision
             await self.async_sync_entities()
             self._notify()
@@ -460,11 +526,12 @@ class IRProManager:
             sent_effect = deepcopy(function.get("state_effect"))
             owner = independent_action_owner(device.get("studio", {}), function_key) if sent_effect else None
             sent_owner = (owner[0]["id"], owner[1].get("action_index")) if owner and owner[0].get("type") == "dual" else None
+            sent_learned_owner = learned_action_signature(learned_action_owner(device.get("studio", {}), function_key))
             sent_device_id, sent_source_id = device["id"], emitter["sourceId"]
             await self._remote_call(emitter["sourceId"], "send_command", record)
             async with self._lock:
                 current = self.find_function(function_key)
-                if current and (current[2]["type"] == "switch" or state_record or sent_effect):
+                if current and (current[2]["type"] == "switch" or state_record or sent_effect or sent_learned_owner):
                     model = deepcopy(self.model)
                     state_updated = False
                     for e in model["emitters"]:
@@ -479,6 +546,11 @@ class IRProManager:
                                         if owner and sent_owner == (owner[0]["id"], owner[1].get("action_index")) and owner[0].get("type") == "dual" and type(owner[1].get("action_index")) is int and owner[1]["action_index"] in (0, 1):
                                             owner[0]["activeSide"] = 1 - owner[1]["action_index"]
                                         state_updated = True
+                                    if sent_learned_owner and f["type"] == "button" and not f.get("state_effect") and d["id"] == sent_device_id and e["sourceId"] == sent_source_id and f["signal_refs"].get("press") == function["signal_refs"].get("press"):
+                                        learned_owner = learned_action_owner(d.get("studio", {}), function_key)
+                                        if learned_action_signature(learned_owner) == sent_learned_owner:
+                                            learned_owner[0]["activeSide"] = 1 - learned_owner[1]["action_index"]
+                                            state_updated = True
                             current_record = next((item for item in d.get("studio", {}).get("savedStates", []) if item["id"] == function_key), None)
                             if current_record and sent_settings is not None and d["id"] == sent_device_id and e["sourceId"] == sent_source_id and record_configuration_key(current_record) == record_configuration_key(state_record):
                                 d["studio"]["state"].update(sent_settings)
@@ -488,7 +560,7 @@ class IRProManager:
                     self.model, self.revision = model, revision
                 self._notify()
             result = {"status": "sent_unconfirmed", "on": bool(next_state) if function["type"] == "switch" else None}
-            return {**result, **self.envelope()} if sent_effect else result
+            return {**result, **self.envelope()} if sent_effect or sent_learned_owner else result
 
     async def async_register_platform(self, kind: str, add_entities: Callable, factory: Callable) -> None:
         self._platforms[kind] = (add_entities, factory)

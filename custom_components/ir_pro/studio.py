@@ -105,6 +105,35 @@ def independent_action_owner(studio: dict, function_key: str) -> tuple[dict, dic
     return None
 
 
+def learned_action_owner(studio: dict, function_key: str) -> tuple[dict, dict] | None:
+    """Find a plain learned side of a mixed dual control, without a state effect."""
+    def visit(node: dict):
+        for child in node.get("learnedActions", []):
+            if child["id"] == function_key:
+                return node, child
+        if node.get("type") == "group" and node.get("group") == "custom":
+            for child in node.get("children", []):
+                if isinstance(child, dict) and (owner := visit(child)):
+                    return owner
+        return None
+
+    for row in studio.get("rows", []):
+        for node in row.get("cells", []):
+            if node and (owner := visit(node)):
+                return owner
+    return None
+
+
+def learned_action_signature(owner: tuple[dict, dict] | None) -> tuple | None:
+    """Do not advance a dual that was reconfigured while its IR send awaited IO."""
+    if owner is None:
+        return None
+    parent, child = owner
+    return (parent["id"], parent.get("type"), parent.get("sendMode", "settings"),
+            parent.get("activeSide", 0), deepcopy(parent.get("actions", [])),
+            child["id"], child.get("action_index"), deepcopy(child.get("signal_refs", {})))
+
+
 def validate_configuration(value: Any, *, full: bool = False) -> dict:
     """Normalize a command state. Off is one command, not many hidden presets."""
     if not isinstance(value, dict) or type(value.get("power")) is not bool:
@@ -265,6 +294,8 @@ def sync_studio(studio: dict, functions: list[dict]) -> None:
                 apply(child)
         for child in node.get("independentActions", []):
             apply(child)
+        for child in node.get("learnedActions", []):
+            apply(child)
 
     for row in studio["rows"]:
         for node in row.get("cells", []):
@@ -286,7 +317,7 @@ def validate_studio(value: Any, functions: list[dict], icons: set[str], current:
 
     def remember_previous(node: dict) -> None:
         previous_nodes[node["id"]] = node
-        for child in (*node.get("children", []), *node.get("independentActions", [])):
+        for child in (*node.get("children", []), *node.get("independentActions", []), *node.get("learnedActions", [])):
             if isinstance(child, dict):
                 remember_previous(child)
 
@@ -327,7 +358,7 @@ def validate_studio(value: Any, functions: list[dict], icons: set[str], current:
         result.update(action=kind, value=value)
         return result
 
-    def node(raw: Any, depth: int = 0, *, independent: bool = False) -> dict:
+    def node(raw: Any, depth: int = 0, *, independent: bool = False, learned: bool = False) -> dict:
         nonlocal count
         count += 1
         if depth > 4 or count > 1500 or not isinstance(raw, dict):
@@ -369,7 +400,9 @@ def validate_studio(value: Any, functions: list[dict], icons: set[str], current:
         mapped = result["type"] == "button" and result["action"] == "learned"
         existing_function = indexed.get(result["id"])
         mapped = mapped or (result["type"] == "dual" and (
-            studio["type"] == "simple" or existing_function and existing_function["type"] == "switch"
+            existing_function and existing_function["type"] == "switch"
+            or not raw.get("learnedActions", previous.get("learnedActions", []))
+            and all(side["action"] == "learned" for side in result["actions"])
         ))
         if mapped:
             function = indexed.get(result["id"])
@@ -385,19 +418,38 @@ def validate_studio(value: Any, functions: list[dict], icons: set[str], current:
             result["state_effect"] = deepcopy(effect)
         if independent and (effect is None or result["type"] != "button" or result["action"] != "learned" or result["value"] != state_effect_identity(effect)):
             _fail("La opción independiente no coincide con el ajuste de su señal.")
-        if independent and ("action_index" in raw or "action_index" in previous):
+        if learned and (effect is not None or "state_effect" in raw or result["type"] != "button" or result["action"] != "learned"):
+            _fail("La acción aprendida debe ser un botón sin cambios de ajustes.")
+        if learned or independent and ("action_index" in raw or "action_index" in previous):
             action_index = _integer(raw.get("action_index", previous.get("action_index")), 0, 1, "La acción del botón")
             if "action_index" in previous and action_index != previous["action_index"]:
                 _fail("La identidad de una acción existente se conserva.")
             result["action_index"] = action_index
         retained = raw.get("independentActions", previous.get("independentActions", []))
-        if not isinstance(retained, list) or len(retained) > 100 or (retained and (studio["type"] != "stateful" or independent)):
+        if not isinstance(retained, list) or len(retained) > 100 or (retained and (studio["type"] != "stateful" or independent or learned)):
             _fail("Las acciones independientes de la carpeta no son válidas.")
         if retained or "independentActions" in raw or "independentActions" in previous:
             result["independentActions"] = [node(child, depth + 1, independent=True) for child in retained]
             effects = [(child.get("action_index"), tuple(child["state_effect"].items())) for child in result["independentActions"]]
             if len(effects) != len(set(effects)):
                 _fail("Hay opciones independientes repetidas en esta carpeta.")
+        learned_children = raw.get("learnedActions", previous.get("learnedActions", []))
+        if ("learnedActions" in raw or "learnedActions" in previous) and result["type"] != "dual":
+            _fail("Solo un botón doble puede tener acciones aprendidas separadas.")
+        if not isinstance(learned_children, list) or len(learned_children) > 2 or (learned_children and (
+            result["type"] != "dual" or independent or learned
+            or existing_function and existing_function["type"] == "switch"
+        )):
+            _fail("Las acciones aprendidas del botón doble no son válidas.")
+        if learned_children or "learnedActions" in raw or "learnedActions" in previous:
+            result["learnedActions"] = [node(child, depth + 1, learned=True) for child in learned_children]
+            indexes = [child["action_index"] for child in result["learnedActions"]]
+            if len(indexes) != len(set(indexes)) or any(result["actions"][index]["action"] != "learned" for index in indexes):
+                _fail("Cada acción aprendida debe corresponder a una acción distinta del botón doble.")
+        if result["type"] == "dual" and not (existing_function and existing_function["type"] == "switch"):
+            learned_indexes = [index for index, side in enumerate(result["actions"]) if side["action"] == "learned"]
+            if len(learned_indexes) == 2 or sorted(child["action_index"] for child in result.get("learnedActions", [])) != learned_indexes:
+                _fail("Cada lado aprendido del botón mixto necesita su propia acción; dos lados aprendidos usan una entidad switch.")
         return result
 
     rows = value.get("rows")

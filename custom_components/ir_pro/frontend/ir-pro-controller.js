@@ -1,7 +1,8 @@
-import {icon} from './ir-pro-icons.js?v=1.0.0';
-import {importModel,exportModel,reconcileCanonical,independentStateEffect,linkedActionEffect,actionStateField,controlledStateFields,recordStateFields,projectState,scopedStateKey,stateRecordMatches,findSavedState} from './ir-pro-model.js?v=1.0.0';
-import {mountIconPickers} from './ir-pro-pickers.js?v=1.0.0';
-import {createModalScrollLock} from './ir-pro-modal-scroll.js?v=1.0.0';
+import {icon} from './ir-pro-icons.js?v=1.0.1';
+import {importModel,exportModel,reconcileCanonical,independentStateEffect,linkedActionEffect,actionStateField,controlledStateFields,recordStateFields,projectState,scopedStateKey,stateRecordMatches,findSavedState} from './ir-pro-model.js?v=1.0.1';
+import {mountIconPickers} from './ir-pro-pickers.js?v=1.0.1';
+import {createModalScrollLock} from './ir-pro-modal-scroll.js?v=1.0.1';
+import {createControlEditor,controlNeedsState} from './ir-pro-editing.js?v=1.0.1';
 export function mountStudio(root,api,initial,isAdmin,openMenu) {
   const scope=root.getRootNode(),lifecycle=new AbortController();
   let disposed=false,catalog=initial.catalog||[],revision=initial.revision||0,saveQueue=Promise.resolve(true),saveFailed=false,actionError='',signalBusy=false,independentSending=false,operation=0,pendingSaves=0,unsubscribe=null,lastAmbientSnapshot='',deferredEnvelope=null,scrollGeneration=0,inputGeneration=0,lastRenderedRoute='';
@@ -68,6 +69,19 @@ export function mountStudio(root,api,initial,isAdmin,openMenu) {
       folder.independentActions.push({...button(choice.name,symbol,'learned',choice.color||folder.color,choice.value),...(choice.action_index===undefined?{}:{action_index:choice.action_index}),state_effect:copy(choice.state_effect)});
     }
   }
+  function learnedActionFor(control,index) {
+    return control.learnedActions?.find(child=>child.action_index===index);
+  }
+  function ensureLearnedActions(control) {
+    if(control.type!=='dual'||!control.actions?.some(side=>side.action==='learned')||control.actions.every(side=>side.action==='learned')){control.learnedActions=[];return;}
+    control.learnedActions=(control.learnedActions||[]).filter(child=>control.actions[child.action_index]?.action==='learned');
+    control.actions.forEach((side,index)=>{
+      if(side.action!=='learned')return;
+      let child=learnedActionFor(control,index);
+      if(!child){child={...button(side.name,side.icon,'learned',side.color),action_index:index};control.learnedActions.push(child);}
+      Object.assign(child,{name:side.name,icon:side.icon,color:side.color,showName:side.showName});
+    });
+  }
   const row = (cells, columns = cells.length || 1) => ({id:uid(),type:'buttons',height:2,columns,cells});
   const displayRow = () => ({id:uid(),type:'display',height:2,width:3,style:'modern',accent:'#f4f6f8',fields:{temperature:true,mode:true,fan:true,swing:true,power:true}});
   const configurationCopy = s => s.power?{power:true,mode:s.mode,temperature:s.temperature,fan:s.fan,swing:swingValue(s)}:{power:false};
@@ -111,7 +125,7 @@ export function mountStudio(root,api,initial,isAdmin,openMenu) {
       side.color=/^#[0-9a-f]{6}$/i.test(side.color)?side.color:fallback.color;
       side.icon=symbols.some(symbol=>symbol.value===side.icon)?side.icon:fallback.icon;
       side.showName=side.showName!==false;
-      if(!actionOptions.some(action=>action.value===side.action)||(d.type!=='stateful'&&side.action!=='learned'))side.action='learned';
+      if(!actionOptions.some(action=>action.value===side.action))side.action='learned';
       if(actionValueChoices(side.action)&&!actionValueChoices(side.action).some(option=>option.value===side.value))side.value=defaultActionValue(side.action);
       return side;
     });
@@ -224,17 +238,18 @@ export function mountStudio(root,api,initial,isAdmin,openMenu) {
   const selected = () => model.emitters.flatMap(e=>e.devices).find(d=>d.id===model.selected);
   const emitterFor = id => model.emitters.find(e=>e.devices.some(d=>d.id===id));
   let confirmedWire=copy(initial.model||{version:2,emitters:[]});
-  function persist(afterSave) {
+  function persist(afterSave,entityRenames={},recoverInvalid=false) {
     if(!isAdmin){toast('Necesitas permisos de administrador para editar IR Pro.');return Promise.resolve(false);}
     ensureModelEntities();
     const snapshot=exportModel(model);
+    for(const emitter of snapshot.emitters)for(const device of emitter.devices)for(const fn of device.functions)if(Object.hasOwn(entityRenames,fn.key))fn.entity=entityRenames[fn.key];
     pendingSaves++;
     saveQueue=saveQueue.then(async()=>{
       if(disposed||saveFailed)return false;
       try{
         const identities=new Map(confirmedWire.emitters.flatMap(emitter=>emitter.devices.flatMap(device=>device.functions)).map(fn=>[fn.key,fn]));
-        for(const emitter of snapshot.emitters)for(const device of emitter.devices)for(const fn of device.functions){const existing=identities.get(fn.key);if(existing){fn.entity=existing.entity;fn.type=existing.type;}}
-        const result=await api.call('save',{model:snapshot,expected_revision:revision});
+        for(const emitter of snapshot.emitters)for(const device of emitter.devices)for(const fn of device.functions){const existing=identities.get(fn.key);if(existing){if(!Object.hasOwn(entityRenames,fn.key))fn.entity=existing.entity;fn.type=existing.type;}}
+        const result=await api.call('save',{model:snapshot,expected_revision:revision,...(Object.keys(entityRenames).length?{entity_renames:copy(entityRenames)}:{})});
         if(disposed)return false;
         revision=result.revision;catalog=result.catalog||catalog;confirmedWire=copy(result.model);reconcileCanonical(model,result.model,snapshot);
         if(result.notices?.length)toast(result.notices.join(' '));
@@ -242,6 +257,7 @@ export function mountStudio(root,api,initial,isAdmin,openMenu) {
         return true;
       }catch(error){
         if(disposed)return false;
+        if(recoverInvalid&&error.code==='invalid_model'){formError(error.message||'Revisa la configuración de la función.');return false;}
         saveFailed=true;model=importModel(confirmedWire,model.selected);editing=false;closeModal();render();
         toast((error.message||'No se han podido guardar los cambios.')+' Recarga el panel antes de continuar.');
         return false;
@@ -277,10 +293,10 @@ export function mountStudio(root,api,initial,isAdmin,openMenu) {
   }
   function flushDeferredEnvelope() {if(deferredEnvelope&&!disposed&&!pendingSaves&&!modal.open&&!entityModal.open&&!editing&&!signalBusy&&!saveFailed)receiveEnvelope(deferredEnvelope);}
   const entitySlug = value => String(value || '').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().replace(/[^a-z0-9]+/g,'_').replace(/^_+|_+$/g,'').slice(0,190) || 'funcion';
-  const entityDomain = (d,b) => b._existingType|| (b.type==='dual'&&d.type==='simple'?'switch':b.type==='button'&&(d.type==='simple'||b.action==='learned')?'button':null);
+  const entityDomain = (d,b) => b._existingType|| (b.type==='dual'&&b.actions?.every(side=>side.action==='learned')&&!b.learnedActions?.length?'switch':b.type==='button'&&b.action==='learned'?'button':null);
   function automationButtons(d,root) {
     const result=[];
-    const visit=b=>{if(!b||typeof b!=='object')return;if(entityDomain(d,b))result.push(b);if(b.type==='group'&&b.group==='custom')(b.children||[]).forEach(visit);(b.independentActions||[]).forEach(visit);};
+    const visit=b=>{if(!b||typeof b!=='object')return;if(entityDomain(d,b))result.push(b);if(b.type==='group'&&b.group==='custom')(b.children||[]).forEach(visit);(b.independentActions||[]).forEach(visit);(b.learnedActions||[]).forEach(visit);};
     if(root)visit(root);else d.rows.filter(r=>r.type==='buttons').forEach(r=>r.cells.forEach(visit));
     return result;
   }
@@ -627,19 +643,31 @@ export function mountStudio(root,api,initial,isAdmin,openMenu) {
       render();toast('Señal enviada · '+name+' · Estado estimado');return true;
     });}finally{independentSending=false;}
   }
+  async function executeLearnedSide(d,b) {
+    if(b.signals?.press!==true||!b.signal_refs?.press){toast('Sin señal. Aprende esta acción al editar el botón.');return false;}
+    const key=b.id,sourceId=emitterFor(d.id)?.sourceId;
+    independentSending=true;
+    try{return await queuePhysical(async()=>{
+      const result=await api.call('press',{function_key:key});
+      if(disposed)return false;
+      adoptCommandEnvelope(result,d,sourceId);render();toast('Señal enviada · '+b.name);return true;
+    });}finally{independentSending=false;}
+  }
   async function executeAction(d,b) {
     if(independentSending){toast('Espera a que termine el envío.');return false;}
     if(signalBusy){toast('Espera a que termine el aprendizaje.');return false;}
     if (b.type==='group') {openGroup(d,b);return false;}
     if (b.type==='dual') {
       const index=dualStateIndex(d,b),linked=dualPowerLinked(d,b),side=dualActions(b,d)[index];
-      if(d.type==='stateful'&&b.sendMode==='independent'&&b._existingType!=='switch'){
+      const learned=side.action==='learned'&&learnedActionFor(b,index);
+      if(learned)return executeLearnedSide(d,learned);
+      if(d.type==='stateful'&&b.sendMode==='independent'&&b._existingType!=='switch'&&linkedActionEffect(side)){
         const choice=independentChoices(b).find(item=>item.action_index===index),child=choice&&independentActionFor(b,choice.value,index);
         if(!child){toast('Sin señal. Aprende esta acción al editar el botón.');return false;}
         // The backend advances the parent phase atomically with the child press.
         return executeIndependent(d,child);
       }
-      if(d.type==='simple'||b._existingType==='switch'){
+      if(b._existingType==='switch'||(b.actions?.every(action=>action.action==='learned')&&!b.learnedActions?.length)){
         return queuePhysical(async()=>{const result=await api.call('press',{function_key:b.id,on:b.activeSide!==1});if(disposed)return false;b.activeSide=result.on?1:0;b.on=result.on;render();toast('Señal enviada · Estado estimado');return true;});
       }
       const sourceId=emitterFor(d.id)?.sourceId,signature=JSON.stringify(dualActions(b,d).map(action=>[action.action,action.value||'']));
@@ -766,16 +794,69 @@ export function mountStudio(root,api,initial,isAdmin,openMenu) {
     dialog.innerHTML='<header class="modal-head"><h2>Borrar señal aprendida</h2></header><div class="modal-body"><p>'+esc(label)+'</p><div class="warning"><span aria-hidden="true">⚠</span><div><strong>Borrado definitivo de la señal.</strong><p>La entidad se conserva. Las automatizaciones que la utilicen dejarán de ejecutar esta función hasta que vuelvas a aprender la señal y guardes los cambios.</p></div></div></div><footer class="modal-foot"><button type="button" class="btn" data-cancel>Cancelar</button><button type="button" class="btn danger" data-confirm>Borrar señal</button></footer>';
     root.appendChild(dialog);dialog.querySelector('[data-cancel]').onclick=()=>dialog.close();dialog.querySelector('[data-confirm]').onclick=()=>{run();dialog.close();};dialog.addEventListener('close',()=>dialog.remove(),{once:true});openNeutralDialog(dialog);
   }
+  function confirmEntityChanges(removed,renamed) {
+    if(!removed.length&&!renamed.length)return Promise.resolve(true);
+    return new Promise(resolve=>{
+      const dialog=document.createElement('dialog');dialog.className='signal-delete-modal';let accepted=false;
+      dialog.innerHTML='<header class="modal-head"><h2>Confirmar cambios de entidades</h2></header><div class="modal-body">'+
+        (removed.length?'<p>Se eliminarán estas entidades al sustituir las funciones:</p><ul>'+removed.map(node=>'<li><code>'+esc(node.entity)+'</code></li>').join('')+'</ul><p>Las nuevas funciones necesitarán sus propias señales aprendidas.</p>':'')+
+        (renamed.length?'<p>Se cambiarán estos identificadores, conservando sus señales:</p><ul>'+renamed.map(change=>'<li><code>'+esc(change.before)+'</code> → <code>'+esc(change.after)+'</code></li>').join('')+'</ul>':'')+
+        '<div class="warning"><span aria-hidden="true">⚠</span><div><strong>Revisa tus automatizaciones.</strong><p>Las automatizaciones, scripts y paneles que usen los identificadores anteriores tendrán que actualizarse.</p></div></div></div><footer class="modal-foot"><button type="button" class="btn" data-cancel>Cancelar</button><button type="button" class="btn danger" data-confirm>Aplicar cambios</button></footer>';
+      root.appendChild(dialog);dialog.querySelector('[data-cancel]').onclick=()=>dialog.close();dialog.querySelector('[data-confirm]').onclick=()=>{accepted=true;dialog.close();};
+      dialog.addEventListener('close',()=>{dialog.remove();resolve(accepted);},{once:true});openNeutralDialog(dialog);
+    });
+  }
   function editButton(d,original,placement,newType='button') {
     if(signalBusy){toast('Hay un aprendizaje en curso. Espera a que termine antes de editar otra función.');return;}
-    const draft=original?copy(original):(newType==='group'?group('Nueva carpeta','folder',d.type==='stateful'?'mode':'custom'):button('Nueva función','remote','learned'));
+    let draft=original?copy(original):(newType==='group'?group('Nueva carpeta','folder',d.type==='stateful'?'mode':'custom'):button('Nueva función','remote','learned'));
+    const identities=createControlEditor(original,uid);
     const displayDraft=displayRow();
-    const allowedActions=d.type==='stateful'?actionOptions:actionOptions.filter(a=>a.value==='learned');
+    const allowedActions=actionOptions.filter(action=>action.value!=='open_group');
     draft.actions=dualActions(draft,d);
-    if(draft._existingType==='switch')draft.actions.forEach(side=>{side.action='learned';side.value='';});
     let previewSide=0;
     draft.group=draft.group || (d.type==='stateful'?'mode':'custom');
     draft.children=(draft.children || ['power_on','power_off']).map(child=>typeof child==='string'?button(actionOptions.find(a=>a.value===child)?.name || 'Función',({power_on:'power',power_off:'power-off',temp_up:'plus',temp_down:'minus',swing:'swing'})[child] || 'remote',d.type==='stateful'?child:'learned'):child);
+    const originalNodes=new Map();
+    const rememberOriginal=node=>{if(!node||typeof node!=='object')return;originalNodes.set(node.id,node);for(const key of ['children','independentActions','learnedActions'])(node[key]||[]).forEach(rememberOriginal);};rememberOriginal(original);
+    const meaning=node=>JSON.stringify([node.type,node.type==='group'?node.group:null,node.action,node.value||'',node.type==='dual'?(node.actions||[]).map(side=>[side.action,side.value||'']):null]);
+    const prepareDraft=()=>{
+      const prepare=node=>{
+        const previous=originalNodes.get(node.id),unchanged=previous&&meaning(previous)===meaning(node);
+        if(node.type==='group'){
+          node.action='open_group';delete node.learnedActions;
+          if(node.group==='custom'){if(!unchanged)node.independentActions=[];(node.children||[]).forEach(prepare);}
+          else{node.children=[];if(!unchanged)node.independentActions=(node.independentActions||[]).filter(child=>Object.hasOwn(independentStateEffect(child)||{},node.group));ensureIndependentActions(node);}
+        }else if(node.type==='dual'){
+          node.children=[];ensureLearnedActions(node);
+          if(node.actions.every(side=>side.action==='learned')){if(!unchanged)node.independentActions=[];}
+          else{
+            const choices=independentChoices({...node,_existingType:null});
+            if(!Array.isArray(node.independentActions))node.independentActions=[];
+            if(!unchanged)node.independentActions=(node.independentActions||[]).filter(child=>choices.some(choice=>choice.action_index===child.action_index&&JSON.stringify(choice.state_effect)===JSON.stringify(independentStateEffect(child))));
+            ensureIndependentActions({...node,_existingType:null});
+          }
+        }else{
+          node.children=[];delete node.learnedActions;
+          if(node.type==='display'||node.action==='learned'){if(!unchanged)node.independentActions=[];}
+          else{
+            const effect=linkedActionEffect(node);
+            if(!unchanged)node.independentActions=(node.independentActions||[]).filter(child=>JSON.stringify(independentStateEffect(child))===JSON.stringify(effect));
+            ensureIndependentActions(node);
+          }
+        }
+      };
+      prepare(draft);
+      const adoptIdentities=(target,source)=>{
+        const changed=target.id!==source.id;
+        for(const key of ['id','entity','_existingType','on','signals','signal_refs','state_effect']){if(Object.hasOwn(source,key))target[key]=copy(source[key]);else delete target[key];}
+        for(const key of ['children','independentActions','learnedActions']){
+          if(changed){if(Object.hasOwn(source,key))target[key]=copy(source[key]);else delete target[key];}
+          else (target[key]||[]).forEach((child,index)=>{if(child&&typeof child==='object')adoptIdentities(child,source[key][index]);});
+        }
+      };
+      adoptIdentities(draft,identities.prepare(draft));
+      if(draft.sendMode==='independent')ensureIndependentActions(draft);
+    };
     const fixedEntities=new Set(automationButtons(d,draft).filter(b=>b.entity).map(b=>b.id));
     const syncDraftEntities=()=>{
       automationButtons(d,draft).forEach(b=>{
@@ -787,15 +868,16 @@ export function mountStudio(root,api,initial,isAdmin,openMenu) {
         b.entity=entity;
       });
     };
-    const entityField=b=>'<section class="entity-field"><span>Entidad</span><div class="entity-value"><code>'+esc(b.entity)+'</code><button type="button" class="icon-btn" data-entity-edit="'+esc(b.id)+'" aria-label="Cambiar nombre de la entidad de '+esc(b.name)+'">'+glyph('pencil')+'</button></div><p class="entity-hint">'+(entityDomain(d,b)==='switch'?'Automatizaciones: switch.turn_on / switch.turn_off.':'Automatizaciones: button.press.')+'</p></section>';
+    const entityField=b=>'<section class="entity-field"><span>Entidad</span><div class="entity-value"><code>'+esc(b.entity)+'</code><button type="button" class="icon-btn" data-entity-edit="'+esc(b.id)+'" aria-label="Cambiar nombre de la entidad de '+esc(b.name)+'">'+glyph('pencil')+'</button></div>'+(entityDomain(d,b)==='switch'?'<p class="entity-hint">Acción 1 · '+esc(b.actions?.[0]?.name||'Encender')+': <code>switch.turn_on</code></p><p class="entity-hint">Acción 2 · '+esc(b.actions?.[1]?.name||'Apagar')+': <code>switch.turn_off</code></p><p class="entity-hint">Las dos acciones utilizan esta misma entidad. Cada acción envía su señal una vez.</p>':'<p class="entity-hint">Acción de Home Assistant: <code>button.press</code>.</p>')+'</section>';
     const sendModeOptions=[{value:'settings',name:'Ajustes del mando'},{value:'independent',name:'Acción independiente'}];
     const sendModeHint='Si algún control de este ajuste es independiente, el ajuste queda fuera del estado general.';
     const renderEntityFields=()=>{
+      prepareDraft();
       const prepare=node=>{if(!node)return;ensureIndependentActions(node);if(node.type==='group'&&node.group==='custom')(node.children||[]).forEach(prepare);};prepare(draft);
       const sendTarget=$('#function-send-mode');
       if(sendTarget){
-        const eligible=d.type==='stateful'&&['button','dual'].includes(draft.type)&&independentChoices(draft).length;
-        sendTarget.innerHTML=eligible?field('Cómo envía la señal','<select id="control-send-mode">'+selectOptions(sendModeOptions,draft.sendMode==='independent'?'independent':'settings')+'</select>')+'<p class="muted small">'+(draft.type==='dual'?'Se aplica a las dos acciones. ':'')+sendModeHint+'</p>':'';
+        const eligible=['button','dual'].includes(draft.type)&&independentChoices(draft).length;
+        sendTarget.innerHTML=eligible?field('Cómo envía la señal','<select id="control-send-mode">'+selectOptions(sendModeOptions,draft.sendMode==='independent'?'independent':'settings')+'</select>')+'<p class="muted small">'+(draft.type==='dual'?'Se aplica a las acciones que modifican ajustes. ':'')+sendModeHint+'</p>':'';
         $('#control-send-mode')?.addEventListener('change',event=>{draft.sendMode=event.target.value;renderEntityFields();},{signal:modalAbort.signal});
       }
       syncDraftEntities();
@@ -809,12 +891,13 @@ export function mountStudio(root,api,initial,isAdmin,openMenu) {
       const functions=[];
       const visit=node=>{
         if(entityDomain(d,node))functions.push(node);
+        (node.learnedActions||[]).forEach(visit);
         if(node.type==='group'&&node.group==='custom')(node.children||[]).forEach(visit);
         else if(node.sendMode==='independent')independentChoices(node).forEach(choice=>{const action=independentActionFor(node,choice.value,choice.action_index);if(action)visit(action);});
       };visit(draft);
       target.innerHTML=functions.length?'<div class="function-signal-list">'+functions.flatMap(node=>(entityDomain(d,node)==='switch'?['on','off']:['press']).map(signal=>{
-        const ref=node.signals?.[signal]===true?node.signal_refs?.[signal]:null,label=signal==='press'?node.name:(signal==='on'?'Encender':'Apagar')+' · Acción '+(signal==='on'?'1':'2');
-        return '<section class="function-signal-row" data-signal-row="'+esc(node.id+'|'+signal)+'"><strong>'+esc(label)+'</strong>'+(independentStateEffect(node)?entityField(node):'')+'<div class="function-signal-status '+(ref?'available':'missing')+'">'+(ref?'Señal disponible':'Sin señal')+'</div><div class="function-signal-actions"><button type="button" class="btn" data-learn-function="'+esc(node.id)+'" data-signal="'+signal+'">'+glyph('radio')+(ref?'Reaprender señal':'Aprender del mando original')+'</button>'+(ref?'<button type="button" class="btn" data-test-function="'+esc(node.id)+'" data-signal="'+signal+'">Probar señal</button><button type="button" class="btn danger" data-clear-function="'+esc(node.id)+'" data-signal="'+signal+'">Borrar señal</button>':'')+'</div></section>';
+        const ref=node.signals?.[signal]===true?node.signal_refs?.[signal]:null,sideIndex=signal==='on'?0:1,label=signal==='press'?node.name:(node.actions?.[sideIndex]?.name||(signal==='on'?'Encender':'Apagar'))+' · Acción '+(sideIndex+1);
+        return '<section class="function-signal-row" data-signal-row="'+esc(node.id+'|'+signal)+'"><strong>'+esc(label)+'</strong>'+(independentStateEffect(node)||draft.learnedActions?.some(child=>child.id===node.id)?entityField(node):'')+'<div class="function-signal-status '+(ref?'available':'missing')+'">'+(ref?'Señal disponible':'Sin señal')+'</div><div class="function-signal-actions"><button type="button" class="btn" data-learn-function="'+esc(node.id)+'" data-signal="'+signal+'">'+glyph('radio')+(ref?'Reaprender señal':'Aprender del mando original')+'</button>'+(ref?'<button type="button" class="btn" data-test-function="'+esc(node.id)+'" data-signal="'+signal+'">Probar señal</button><button type="button" class="btn danger" data-clear-function="'+esc(node.id)+'" data-signal="'+signal+'">Borrar señal</button>':'')+'</div></section>';
       })).join('')+'</div>':'';
       $$('[data-entity-edit]',target).forEach(control=>{control.onclick=()=>openEntityEditor(functions.find(node=>node.id===control.dataset.entityEdit));});
       $$('[data-learn-function]',target).forEach(control=>control.addEventListener('click',async()=>{
@@ -844,7 +927,6 @@ export function mountStudio(root,api,initial,isAdmin,openMenu) {
     };
     const openEntityEditor=b=>{
       if(!b)return;
-      if(b._existingType){toast('Este identificador ya está registrado. Puedes cambiarlo desde la configuración de la entidad en Home Assistant.');return;}
       const domain=entityDomain(d,b),input=$('#entity-suffix'),error=$('#entity-error');
       const controller=new AbortController(),signal=controller.signal;
       $('#entity-prefix').textContent=domain+'.';input.value=b.entity.slice(domain.length+1);
@@ -889,7 +971,7 @@ export function mountStudio(root,api,initial,isAdmin,openMenu) {
         field('Nombre','<input data-dual-index="'+index+'" data-dual-field="name" maxlength="40" value="'+esc(side.name)+'">')+
         '<label class="dual-show-name"><input type="checkbox" data-dual-index="'+index+'" data-dual-field="showName"'+(side.showName?' checked':'')+'>Mostrar texto</label>'+
         '<div class="form-grid">'+field('Icono','<select data-dual-index="'+index+'" data-dual-field="icon">'+selectOptions(symbols,side.icon)+'</select>')+field('Color','<input type="color" data-dual-index="'+index+'" data-dual-field="color" value="'+esc(side.color)+'">')+'</div>'+
-        field('Acción al pulsar','<select data-dual-index="'+index+'" data-dual-field="action">'+selectOptions(draft._existingType==='switch'?allowedActions.filter(action=>action.value==='learned'):d.type==='stateful'?allowedActions.filter(action=>action.value!=='learned'):allowedActions,side.action)+'</select>')+
+        field('Acción al pulsar','<select data-dual-index="'+index+'" data-dual-field="action">'+selectOptions(allowedActions,side.action)+'</select>')+
         (actionValueChoices(side.action)?field(actionValueLabel(side.action),'<select data-dual-index="'+index+'" data-dual-field="value">'+selectOptions(actionValueChoices(side.action),side.value||defaultActionValue(side.action))+'</select>'):'')+'</fieldset>';
       }).join('')+'</div><p class="dual-state-hint muted small">'+(dualPowerLinked(d,draft)?'Comparte el estado de encendido con la pantalla. Otro botón de encender o apagar también actualizará su aspecto.':'Alterna entre las dos acciones al pulsarlo.')+'</p>';
       $$('[data-dual-field]',target).forEach(input=>{
@@ -909,7 +991,7 @@ export function mountStudio(root,api,initial,isAdmin,openMenu) {
     const renderChildren=()=>{
       const target=$('#folder-children');if(!target)return;
       const children=draft.children;
-      target.innerHTML=children.map((child,index)=>'<div class="child-config">'+field('Nombre','<input data-child-name="'+index+'" value="'+esc(child.name)+'" maxlength="40">')+'<label class="dual-show-name"><input type="checkbox" data-child-show="'+index+'"'+(child.showName!==false?' checked':'')+'>Mostrar texto</label>'+field('Icono','<select data-child-icon="'+index+'">'+selectOptions(symbols,child.icon)+'</select>')+field('Acción','<select data-child-action="'+index+'">'+selectOptions(allowedActions,child.action)+'</select>')+(actionValueChoices(child.action)?field(actionValueLabel(child.action),'<select data-child-value="'+index+'">'+selectOptions(actionValueChoices(child.action),child.value||defaultActionValue(child.action))+'</select>'):'')+(d.type==='stateful'&&independentChoices(child).length?field('Cómo envía la señal','<select data-child-send-mode="'+index+'">'+selectOptions(sendModeOptions,child.sendMode==='independent'?'independent':'settings')+'</select>')+'<p class="muted small">'+sendModeHint+'</p>':'')+'<div data-child-entity="'+esc(child.id)+'"></div><button class="btn text" data-remove-child="'+index+'">'+glyph('trash')+'Quitar botón</button></div>').join('')+'<button class="btn" id="add-folder-child">'+glyph('plus')+'Añadir botón a la carpeta</button>';
+      target.innerHTML=children.map((child,index)=>'<div class="child-config">'+field('Nombre','<input data-child-name="'+index+'" value="'+esc(child.name)+'" maxlength="40">')+'<label class="dual-show-name"><input type="checkbox" data-child-show="'+index+'"'+(child.showName!==false?' checked':'')+'>Mostrar texto</label>'+field('Icono','<select data-child-icon="'+index+'">'+selectOptions(symbols,child.icon)+'</select>')+field('Acción','<select data-child-action="'+index+'">'+selectOptions(allowedActions,child.action)+'</select>')+(actionValueChoices(child.action)?field(actionValueLabel(child.action),'<select data-child-value="'+index+'">'+selectOptions(actionValueChoices(child.action),child.value||defaultActionValue(child.action))+'</select>'):'')+(independentChoices(child).length?field('Cómo envía la señal','<select data-child-send-mode="'+index+'">'+selectOptions(sendModeOptions,child.sendMode==='independent'?'independent':'settings')+'</select>')+'<p class="muted small">'+sendModeHint+'</p>':'')+'<div data-child-entity="'+esc(child.id)+'"></div><button class="btn text" data-remove-child="'+index+'">'+glyph('trash')+'Quitar botón</button></div>').join('')+'<button class="btn" id="add-folder-child">'+glyph('plus')+'Añadir botón a la carpeta</button>';
       $$('[data-child-name]',target).forEach(input=>input.addEventListener('input',()=>{children[Number(input.dataset.childName)].name=input.value;renderEntityFields();},{signal:modalAbort.signal}));
       $$('[data-child-show]',target).forEach(input=>input.addEventListener('change',()=>children[Number(input.dataset.childShow)].showName=input.checked,{signal:modalAbort.signal}));
       $$('[data-child-icon]',target).forEach(input=>input.addEventListener('change',()=>children[Number(input.dataset.childIcon)].icon=input.value,{signal:modalAbort.signal}));
@@ -923,8 +1005,8 @@ export function mountStudio(root,api,initial,isAdmin,openMenu) {
     const renderActionFields=()=>{
       const target=$('#action-fields');if(!target)return;
       if(draft.type==='group') {
-        const groups=d.type==='stateful'?[{value:'mode',name:'Modos del aire'},{value:'fan',name:'Velocidades del ventilador'},{value:'swing',name:'Posiciones y oscilación'},{value:'custom',name:'Botones personalizados'}]:[{value:'custom',name:'Botones personalizados'}];
-        const official=d.type==='stateful'&&['mode','fan','swing'].includes(draft.group);
+        const groups=[{value:'mode',name:'Modos del aire'},{value:'fan',name:'Velocidades del ventilador'},{value:'swing',name:'Posiciones y oscilación'},{value:'custom',name:'Botones personalizados'}];
+        const official=['mode','fan','swing'].includes(draft.group);
         draft.sendMode=draft.sendMode==='independent'?'independent':'settings';
         if(draft.group==='fan'){draft.fanSpeedCount=clamp(draft.fanSpeedCount,2,5,3);draft.fanAuto=draft.fanAuto!==false;}
         if(draft.group==='swing'){draft.swingPositionCount=clamp(draft.swingPositionCount,1,6,6);draft.swingAuto=draft.swingAuto!==false;draft.swingOff=draft.swingOff!==false;}
@@ -951,7 +1033,6 @@ export function mountStudio(root,api,initial,isAdmin,openMenu) {
         if(!allowedActions.some(action=>action.value===draft.action))draft.action=allowedActions[0].value;
         if(actionValueChoices(draft.action)&&!actionValueChoices(draft.action).some(option=>option.value===draft.value))draft.value=defaultActionValue(draft.action);
         target.innerHTML=field('Acción','<select id="button-action">'+selectOptions(allowedActions,draft.action)+'</select>')+(actionValueChoices(draft.action)?field(actionValueLabel(draft.action),'<select id="action-value">'+selectOptions(actionValueChoices(draft.action),draft.value||defaultActionValue(draft.action))+'</select>'):draft.action==='learned'?'<p class="muted small">Aprende la señal del mando original. Probarla es opcional; puedes guardarla en cuanto se reciba.</p>':'');
-        if(original?._existingType&&$('#button-action'))$('#button-action').disabled=true;
         $('#button-action')?.addEventListener('change',event=>{draft.action=event.target.value;draft.value=defaultActionValue(draft.action);renderActionFields();},{signal:modalAbort.signal});
         $('#action-value')?.addEventListener('change',event=>{draft.value=event.target.value;renderEntityFields();},{signal:modalAbort.signal});
       }
@@ -961,10 +1042,9 @@ export function mountStudio(root,api,initial,isAdmin,openMenu) {
       ...(original?[{label:'Eliminar',className:'danger',run:()=>{closeModal();confirmDelete('Eliminar función','Se eliminará «'+original.name+'» de este mando.',()=>{const slot=getButton(d,original.id);if(slot)slot.row.cells[slot.index]=null;});}}]:[]),
       {label:'Cancelar'},{label:'Guardar cambios',className:'primary',run:async()=>{
         draft.name=draft.name.trim();
+        prepareDraft();
         if(draft.type==='display') {
           if(!Object.values(displayDraft.fields).some(Boolean)){formError('Selecciona al menos un dato para la pantalla.');return;}
-          if(original){const slot=getButton(d,original.id);if(slot)slot.row.cells[slot.index]=null;}
-          d.rows.unshift(copy(displayDraft));
         } else {
           if(!draft.name){formError('Escribe un nombre para la función.');return;}
           if(draft.type==='dual') {
@@ -975,12 +1055,24 @@ export function mountStudio(root,api,initial,isAdmin,openMenu) {
           if(draft.type==='group'&&draft.group==='custom'&&(!draft.children.length||draft.children.some(child=>!child.name.trim()||(child.showName===false&&child.icon==='none')))){formError('Añade al menos un botón con nombre y comprueba que se muestre el texto o un icono.');return;}
           syncDraftEntities();
           if(automationButtons(d,draft).some(b=>!new RegExp('^'+entityDomain(d,b)+'\\.[a-z0-9_]{1,240}$').test(b.entity||'')||entityTaken(b.entity,b.id,d,draft))){formError('Revisa las entidades: cada función debe tener un identificador válido y único.');return;}
-          if(original)Object.assign(original,copy(draft));else{let slot=placement&&d.rows.find(r=>r.id===placement.rowId);if(slot&&slot.type==='buttons'&&!slot.cells[placement.index])slot.cells[placement.index]=copy(draft);else{const empty=findEmpty(d);empty.row.cells[empty.index]=copy(draft);}}
         }
-        if(await persist()){closeModal();render();toast('Función guardada.');}
+        const before=original?automationButtons(d,original).filter(node=>node._existingType):[],after=draft.type==='display'?[]:automationButtons(d,draft);
+        const current=new Map(after.map(node=>[node.id,node]));
+        const removed=before.filter(node=>!current.has(node.id));
+        const renamed=before.filter(node=>current.has(node.id)&&current.get(node.id).entity!==node.entity).map(node=>({key:node.id,before:node.entity,after:current.get(node.id).entity}));
+        if(!await confirmEntityChanges(removed,renamed))return;
+        const deviceBefore=copy(d);
+        if(controlNeedsState(draft))d.type='stateful';
+        if(draft.type==='display'){
+          if(original){const slot=getButton(d,original.id);if(slot)slot.row.cells[slot.index]=null;}
+          d.rows.unshift(copy(displayDraft));
+        }else if(original){const slot=getButton(d,original.id);if(!slot){formError('La función ha cambiado. Vuelve a abrir el editor.');return;}slot.row.cells[slot.index]=copy(draft);}
+        else{let slot=placement&&d.rows.find(r=>r.id===placement.rowId);if(slot&&slot.type==='buttons'&&!slot.cells[placement.index])slot.cells[placement.index]=copy(draft);else{const empty=findEmpty(d);empty.row.cells[empty.index]=copy(draft);}}
+        if(await persist(undefined,Object.fromEntries(renamed.map(change=>[change.key,change.after])),true)){closeModal();render();toast('Función guardada.');}
+        else if(!saveFailed){for(const key of Object.keys(d))delete d[key];Object.assign(d,deviceBefore);}
       }}
     ],()=>{
-      updateAppearance();preview();renderActionFields();if(original?._existingType)$('#function-type').disabled=true;
+      updateAppearance();preview();renderActionFields();
       $('#function-type').addEventListener('change',event=>{draft.type=event.target.value;updateAppearance();if(draft.type==='dual'&&(!draft.name.trim()||draft.name==='Nueva función')){draft.name=d.type==='stateful'?'Encendido del aire':'Botón de doble acción';$('#button-name').value=draft.name;}if(draft.type==='group'&&draft.icon==='remote'){draft.icon='folder';$('#button-icon').value='folder';}renderActionFields();preview();},{signal:modalAbort.signal});
       $('#button-name').addEventListener('input',event=>{draft.name=event.target.value;preview();},{signal:modalAbort.signal});
       $('#button-icon').addEventListener('change',event=>{draft.icon=event.target.value;preview();},{signal:modalAbort.signal});

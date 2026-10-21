@@ -89,6 +89,44 @@ class WebSocketTests(unittest.IsolatedAsyncioTestCase):
                 connection.send_error.assert_not_called()
                 connection.send_result.assert_called_once()
 
+    async def test_entity_rename_save_is_not_dispatched_without_admin(self):
+        for authenticated, admin in ((False, False), (True, False)):
+            with self.subTest(authenticated=authenticated, admin=admin):
+                connection = self.connection(authenticated=authenticated, admin=admin)
+                await self.websocket.ws_save(self.hass, connection, {
+                    "id": 16, "model": {}, "expected_revision": 5,
+                    "entity_renames": {"function-key": "button.new_identifier"},
+                })
+                self.manager.async_save_model.assert_not_awaited()
+                connection.send_result.assert_not_called()
+                connection.send_error.assert_called_once_with(
+                    16, "permission_denied", "Solo los administradores pueden realizar esta operación."
+                )
+
+    async def test_authorized_save_forwards_exact_entity_renames_and_revision(self):
+        connection = self.connection(admin=True)
+        model = {"version": 2, "emitters": []}
+        renames = {"first-function": "button.luz_salon", "second-function": "switch.televisor"}
+        await self.websocket.ws_save(self.hass, connection, {
+            "id": 17, "model": model, "expected_revision": 6, "entity_renames": renames,
+        })
+        self.manager.async_save_model.assert_awaited_once_with(model, 6, entity_renames=renames)
+        self.assertIs(self.manager.async_save_model.call_args.kwargs["entity_renames"], renames)
+        connection.send_error.assert_not_called()
+        connection.send_result.assert_called_once_with(17, {"revision": 2})
+        self.manager.async_press.assert_not_awaited()
+        self.manager.async_learn.assert_not_awaited()
+
+    async def test_save_without_entity_renames_retains_legacy_manager_call(self):
+        connection = self.connection(admin=True)
+        model = {"version": 2, "emitters": []}
+        await self.websocket.ws_save(self.hass, connection, {
+            "id": 18, "model": model, "expected_revision": 7,
+        })
+        self.manager.async_save_model.assert_awaited_once_with(model, 7)
+        self.assertEqual(self.manager.async_save_model.call_args.kwargs, {})
+        connection.send_error.assert_not_called()
+
     async def test_learn_returns_ready_capture_without_testing_or_confirming(self):
         connection = self.connection(admin=True)
         await self.websocket.ws_learn(self.hass, connection, {
