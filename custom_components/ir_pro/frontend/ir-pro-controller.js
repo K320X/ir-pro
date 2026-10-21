@@ -1,7 +1,7 @@
-import {icon} from './ir-pro-icons.js?v=0.2.0b7';
-import {importModel,exportModel,reconcileCanonical,independentStateEffect,linkedActionEffect,actionStateField,controlledStateFields,recordStateFields,projectState,scopedStateKey,stateRecordMatches,findSavedState} from './ir-pro-model.js?v=0.2.0b7';
-import {mountIconPickers} from './ir-pro-pickers.js?v=0.2.0b7';
-import {createModalScrollLock} from './ir-pro-modal-scroll.js?v=0.2.0b7';
+import {icon} from './ir-pro-icons.js?v=0.2.0b8';
+import {importModel,exportModel,reconcileCanonical,independentStateEffect,linkedActionEffect,actionStateField,controlledStateFields,recordStateFields,projectState,scopedStateKey,stateRecordMatches,findSavedState} from './ir-pro-model.js?v=0.2.0b8';
+import {mountIconPickers} from './ir-pro-pickers.js?v=0.2.0b8';
+import {createModalScrollLock} from './ir-pro-modal-scroll.js?v=0.2.0b8';
 export function mountStudio(root,api,initial,isAdmin,openMenu) {
   const scope=root.getRootNode(),lifecycle=new AbortController();
   let disposed=false,catalog=initial.catalog||[],revision=initial.revision||0,saveQueue=Promise.resolve(true),saveFailed=false,actionError='',signalBusy=false,independentSending=false,operation=0,pendingSaves=0,unsubscribe=null,lastAmbientSnapshot='',deferredEnvelope=null,scrollGeneration=0,inputGeneration=0,lastRenderedRoute='';
@@ -412,7 +412,7 @@ export function mountStudio(root,api,initial,isAdmin,openMenu) {
     const e=emitterFor(d.id);
     app.innerHTML='<div class="remote-header"><div class="remote-navigation"><button class="btn text" data-home>'+glyph('arrow-left')+'Emisores</button><span class="muted remote-emitter">'+esc(e?.name||'')+'</span></div><div class="page-head remote-head"><div class="identity"><div><h1>'+esc(d.name)+'</h1></div></div><div class="page-actions">'+(editing?'<button class="btn text" data-device-settings>'+glyph('pencil')+'Nombre e icono</button>':'')+'<button class="btn'+(editing?' primary':'')+'" data-edit>'+glyph(editing?'check':'settings')+(editing?'Listo':'Editar mando')+'</button></div></div></div>'+
       (editing?'<div class="editor-note">'+glyph('move')+'<span>Arrastra los botones para colocarlos. Pulsa un elemento para editarlo.</span></div>':'')+
-      '<div class="remote-canvas'+(editing?' editing':'')+'">'+d.rows.map((r,index)=>'<section class="layout-row'+(editing?' edit-area':'')+'" data-row="'+esc(r.id)+'" style="--level:'+r.height+'">'+(editing?rowTools(r,index):'')+
+      '<div class="remote-canvas'+(editing?' editing':'')+'">'+d.rows.map((r,index)=>'<section class="layout-row'+(editing?' edit-area':'')+'" data-row="'+esc(r.id)+'" data-height="'+r.height+'" style="--level:'+r.height+'">'+(editing?rowTools(r,index):'')+
       (r.type==='display'?'<div class="display-preview">'+displayHTML(d,r)+'</div>':'<div class="row-grid" style="--cols:'+r.columns+';--level:'+r.height+'">'+r.cells.map((b,i)=>buttonHTML(d,b,r,i)).join('')+'</div>')+'</section>').join('')+
       (editing?'<div class="row-add-actions"><button class="btn" data-add-row>'+glyph('add-row')+'Añadir fila</button><button class="btn" data-add-element>'+glyph('plus')+'Añadir función</button></div>':'')+'</div>'+(d.type==='stateful'?stateCapturePanel(d):'');
   }
