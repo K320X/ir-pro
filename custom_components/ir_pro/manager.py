@@ -523,6 +523,10 @@ class IRProManager:
             signal = "press" if function["type"] == "button" else ("on" if next_state else "off")
             record = self._record(function["signal_refs"][signal])
             sent_settings = deepcopy(state_record["settings"]) if state_record else None
+            if _expected_state is not None:
+                # Scoped matching marks irrelevant dry/fan temperatures as None.
+                # Replaying a match must not overwrite those prepared settings.
+                sent_settings = {field: value for field, value in zip(_expected_state[0], _expected_state[1:]) if value is not None}
             sent_effect = deepcopy(function.get("state_effect"))
             owner = independent_action_owner(device.get("studio", {}), function_key) if sent_effect else None
             sent_owner = (owner[0]["id"], owner[1].get("action_index")) if owner and owner[0].get("type") == "dual" else None

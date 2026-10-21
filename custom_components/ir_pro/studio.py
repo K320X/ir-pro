@@ -19,7 +19,7 @@ STUDIO_ICONS = {
     *(f"fan-speed-{n}" for n in range(1, 6)),
 }
 ACTIONS = {"learned", "power_on", "power_off", "temp_up", "temp_down",
-           "set_mode", "set_fan", "set_swing", "swing", "open_group"}
+           "set_mode", "set_fan", "set_swing", "swing", "open_group", "send_state"}
 _ID = re.compile(r"^[a-zA-Z0-9_-]{1,128}$")
 _COLOR = re.compile(r"^#[a-fA-F0-9]{6}$")
 

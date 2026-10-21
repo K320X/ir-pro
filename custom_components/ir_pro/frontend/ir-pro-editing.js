@@ -1,4 +1,4 @@
-import {independentStateEffect,linkedActionEffect} from './ir-pro-model.js?v=1.0.1';
+import {independentStateEffect,linkedActionEffect} from './ir-pro-model.js?v=1.0.2';
 
 const metadata=['entity','_existingType','on','signals','signal_refs'];
 const collections=['children','independentActions','learnedActions'];
@@ -54,8 +54,8 @@ export function createControlEditor(original,makeId) {
 
 export function controlNeedsState(node) {
   if(!node||typeof node!=='object')return false;
-  return node.type==='display'||!!independentStateEffect(node)||!!linkedActionEffect(node)||
+  return node.type==='display'||node.action==='send_state'||!!independentStateEffect(node)||!!linkedActionEffect(node)||
     node.type==='group'&&['mode','fan','swing'].includes(node.group)||
-    node.type==='dual'&&(node.actions||[]).some(side=>!!linkedActionEffect(side))||
+    node.type==='dual'&&(node.actions||[]).some(side=>side.action==='send_state'||!!linkedActionEffect(side))||
     descendants(node).some(controlNeedsState);
 }

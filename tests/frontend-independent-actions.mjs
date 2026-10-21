@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {randomUUID} from 'node:crypto';
 import vm from 'node:vm';
-import {importModel,exportModel,reconcileCanonical,independentStateEffect,linkedActionEffect,actionStateField,controlledStateFields} from '../custom_components/ir_pro/frontend/ir-pro-model.js';
+import {importModel,exportModel,reconcileCanonical,independentStateEffect,linkedActionEffect,actionStateField,controlledStateFields,recordStateFields,projectState,findSavedState} from '../custom_components/ir_pro/frontend/ir-pro-model.js';
 
 const source=readFileSync(new URL('../custom_components/ir_pro/frontend/ir-pro-controller.js',import.meta.url),'utf8');
 const extract=name=>{
@@ -240,3 +240,92 @@ for(const change of ['delete','replace','actions','phase']){
 }
 assert.equal(settingsRequests,6);
 console.log('Settings dual phases advance only the current matching control after canonical adoption; deleted/replaced/reconfigured nodes remain authoritative.');
+
+// Generic sending is separate from a setting-changing action: run its actual
+// helper, physical queue, matcher, validator and canonical adoption together.
+const plain=value=>JSON.parse(JSON.stringify(value));
+function genericSendHarness(){
+ const calls=[],messages=[],errors=[],stats={persists:0};
+ const runtime={copy:structuredClone,uid:randomUUID,independentStateEffect,linkedActionEffect,actionStateField,controlledStateFields,recordStateFields,projectState,findSavedState,importModel,exportModel,
+  disposed:false,independentSending:false,signalBusy:false,saveFailed:false,pendingSaves:0,saveQueue:Promise.resolve(true),revision:1,catalog:[],confirmedWire:{},
+  render(){},toast:message=>messages.push(message),clearActionError(){},handleActionError:error=>errors.push(error),flushDeferredEnvelope(){},
+  persist:async()=>{stats.persists++;assert.ok(runtime.allowPhasePersist,'Sending current settings cannot persist or alter them');return true;},
+  api:{call:async(action,data)=>{calls.push([action,plain(data)]);assert.equal(action,'send_state');if(runtime.rejectSend)throw runtime.rejectSend;if(runtime.delayedResponse)return runtime.delayedResponse();return response();}}
+ };
+ runtime.emitterFor=id=>runtime.model.emitters.find(emitter=>emitter.devices.some(device=>device.id===id));
+ vm.createContext(runtime);
+ const constant=name=>source.split('\n').find(line=>line.trimStart().startsWith('const '+name+' ='));
+ const config=source.slice(source.indexOf('  const clamp ='),source.indexOf('  const button ='));
+ const constructors=source.slice(source.indexOf('  const button ='),source.indexOf('  function validateDevice'));
+ const validate=extract('validateDevice').split('\n  let model=')[0];
+ vm.runInContext(config+'\n'+constructors+'\n'+['entitySlug','entityDomain'].map(constant).join('\n')+'\n'+['automationButtons','ensureModelEntities','queuePhysical','adoptCommandEnvelope','sendCurrentState','executeAction'].map(extract).join('\n')+'\n'+validate,runtime);
+ vm.runInContext('globalThis.d=newRemote("Estado actual","wind");d.state={power:true,mode:"cool",temperature:24,fan:"high",swing:"off"};d.rows.push(row([button("Enviar","remote","send_state")]));globalThis.model={version:1,selected:d.id,emitters:[{id:"send-emitter",sourceId:"send-source",name:"IR emisor",devices:[d]}]};ensureModelEntities();',runtime);
+ const device=()=>runtime.model.emitters[0].devices[0];
+ const response=()=>{const next=exportModel(runtime.model);for(const emitter of next.emitters)for(const device of emitter.devices)for(const fn of device.functions)fn.signals=Object.fromEntries(Object.keys(fn.signal_refs||{}).map(signal=>[signal,true]));runtime.changeResponse?.(next);return {revision:runtime.revision+1,model:next};};
+ const capture=()=>{const d=device(),fields=controlledStateFields(d),id=randomUUID(),record={id,name:'Ajustes capturados',entity:'button.saved_'+id.replaceAll('-',''),controlled_fields:fields,settings:projectState(d.state,fields),signal:{kind:'learned',id:'saved-reference-'+id}};d.savedStates=[record];return record;};
+ const send=()=>{runtime.d=device();runtime.b=runtime.d.rows.at(-1).cells[0];return vm.runInContext('executeAction(d,b)',runtime);};
+ return {runtime,calls,messages,errors,stats,device,response,capture,send};
+}
+
+// Each press sends one exact snapshot, including an off state, without first
+// changing power/temperature/mode or issuing an unrelated save or button press.
+for(const mode of ['on','off','dry','independent-temperature']){
+ const h=genericSendHarness(),device=h.device();
+ if(mode==='off')device.state.power=false;
+ if(mode==='dry'){device.state.mode='dry';device.state.temperature=29;}
+ if(mode==='independent-temperature')device.rows[2].cells[2].sendMode='independent';
+ const record=h.capture();if(mode==='dry')record.settings.temperature=18;
+ if(mode==='independent-temperature')device.state.temperature=30;
+ const before=plain(device.state),fields=controlledStateFields(device),sending=device.rows.at(-1).cells[0];
+ assert.ok(!sending.entity);assert.ok(!exportModel(h.runtime.model).emitters[0].devices[0].functions.some(fn=>fn.key===sending.id));
+ assert.equal(await h.send(),true);assert.deepEqual(h.calls,[['send_state',{device_id:device.id,state:before,controlled_fields:fields}]]);assert.deepEqual(plain(h.device().state),before);assert.equal(h.stats.persists,0);assert.equal(h.runtime.independentSending,false);
+ if(mode==='off')assert.deepEqual(fields,['power']);if(mode==='independent-temperature')assert.ok(!fields.includes('temperature'));
+}
+
+// Independent swing never enters combination matching, but its exact current
+// display value is preserved in the request and in the canonical response.
+{
+ const h=genericSendHarness();h.capture();
+ for(const swing of ['off','auto',...Array.from({length:6},(_,index)=>'position_'+(index+1))]){
+  h.device().state.swing=swing;const before=plain(h.device().state),count=h.calls.length;
+  assert.equal(await h.send(),true);assert.equal(h.calls.length,count+1);assert.deepEqual(h.calls.at(-1)[1].state,before);assert.ok(!h.calls.at(-1)[1].controlled_fields.includes('swing'));assert.deepEqual(plain(h.device().state),before);
+ }
+ assert.equal(h.stats.persists,0);
+}
+
+// No signal, an unlearned match, ambiguity and wholly independent settings are
+// local guards. None queues a request, changes the current state or saves it.
+for(const situation of ['missing','unlearned','ambiguous','all-independent']){
+ const h=genericSendHarness(),device=h.device();
+ if(situation==='unlearned')h.capture().signal=null;
+ if(situation==='ambiguous'){const record=h.capture();device.savedStates.push({...structuredClone(record),id:randomUUID(),entity:'button.ambiguous'});}
+ if(situation==='all-independent'){device.rows[1].cells.forEach(node=>node.sendMode='independent');device.rows[2].cells.forEach(node=>node.sendMode='independent');assert.deepEqual(controlledStateFields(device),[]);}
+ const before=JSON.stringify(h.runtime.model),queue=h.runtime.saveQueue;
+ assert.equal(await h.send(),false);assert.deepEqual(h.calls,[]);assert.equal(JSON.stringify(h.runtime.model),before);assert.equal(h.stats.persists,0);assert.equal(h.runtime.pendingSaves,0);assert.equal(h.runtime.saveQueue,queue);assert.equal(h.runtime.independentSending,false);
+}
+
+// Pending sends lock other actions. A concurrent canonical response wins over
+// the detached snapshot, and failures release the lock without local mutation.
+{
+ const h=genericSendHarness();h.capture();let resolveSend;
+ h.runtime.delayedResponse=()=>new Promise(resolve=>{resolveSend=resolve;});
+ const before=JSON.stringify(h.runtime.model),pending=h.send();await new Promise(resolve=>setImmediate(resolve));
+ assert.equal(h.runtime.independentSending,true);assert.equal(h.calls.length,1);assert.equal(await h.send(),false);
+ h.runtime.b={type:'button',action:'temp_up'};assert.equal(await vm.runInContext('executeAction(d,b)',h.runtime),false);assert.equal(JSON.stringify(h.runtime.model),before);assert.equal(h.calls.length,1);
+ h.runtime.changeResponse=next=>{next.emitters[0].devices[0].studio.state.swing='position_6';};resolveSend(h.response());assert.equal(await pending,true);assert.equal(h.device().state.swing,'position_6');assert.equal(h.runtime.independentSending,false);assert.equal(h.stats.persists,0);
+}
+{
+ const h=genericSendHarness();h.capture();h.runtime.rejectSend=new Error('Emisor no disponible');const before=JSON.stringify(h.runtime.model);
+ assert.equal(await h.send(),false);assert.equal(h.calls.length,1);assert.equal(h.errors.length,1);assert.equal(JSON.stringify(h.runtime.model),before);assert.equal(h.runtime.independentSending,false);assert.equal(h.runtime.saveFailed,false);assert.equal(h.stats.persists,0);
+}
+
+// A dual may alternate generic sends even if it retained independent mode.
+// Only its visible phase is saved afterward; neither side changes settings.
+{
+ const h=genericSendHarness(),device=h.device(),control=device.rows.at(-1).cells[0];
+ Object.assign(control,{type:'dual',activeSide:0,sendMode:'independent',actions:[{name:'Enviar primero',action:'send_state',icon:'power',color:'#56c4ed',showName:true},{name:'Enviar segundo',action:'send_state',icon:'power-off',color:'#56c4ed',showName:true}]});
+ h.runtime.allowPhasePersist=true;h.capture();const before=plain(device.state);
+ assert.equal(await h.send(),true);assert.equal(h.device().rows.at(-1).cells[0].activeSide,1);assert.equal(await h.send(),true);assert.equal(h.device().rows.at(-1).cells[0].activeSide,0);
+ assert.equal(h.calls.length,2);assert.ok(h.calls.every(([action,data])=>action==='send_state'&&JSON.stringify(data.state)===JSON.stringify(before)));assert.equal(h.stats.persists,2);assert.deepEqual(plain(h.device().state),before);
+}
+console.log('Generic current-state sends: exact snapshots/scopes, ambiguity guards, no own entity or settings save, queue locking and canonical dual phases passed.');

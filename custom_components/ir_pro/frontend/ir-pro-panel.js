@@ -1,6 +1,6 @@
-import {template,styles} from './ir-pro-theme.js?v=1.0.1';
-import {mountStudio} from './ir-pro-controller.js?v=1.0.1';
-import {mountColorControls} from './ir-pro-color-controls.js?v=1.0.1';
+import {template,styles} from './ir-pro-theme.js?v=1.0.2';
+import {mountStudio} from './ir-pro-controller.js?v=1.0.2';
+import {mountColorControls} from './ir-pro-color-controls.js?v=1.0.2';
 
 class IRProPanel extends HTMLElement {
   constructor(){super();this.attachShadow({mode:'open'});this._hass=null;this._controller=null;this._loading=false;this._generation=0;this._viewAbort=null;this._colorControlsDispose=null;}
@@ -19,7 +19,7 @@ class IRProPanel extends HTMLElement {
       this.shadowRoot.innerHTML='<style>'+styles+'</style>'+template;
       this._viewAbort?.abort();this._colorControlsDispose?.();this._viewAbort=new AbortController();this._colorControlsDispose=mountColorControls(this.shadowRoot,this._viewAbort.signal);
       const api={call:(action,data={})=>this._hass.callWS({type:'ir_pro/'+action,...data}),subscribe:handler=>this._hass.connection.subscribeMessage(handler,{type:'ir_pro/subscribe'}),entity:entityId=>this._hass.states?.[entityId],state:entityId=>this._hass.states?.[entityId]?.state,available:entityId=>{const entity=this._hass.states?.[entityId];return !!entity&&!['unavailable','unknown'].includes(entity.state);}};
-      this.shadowRoot.getElementById('ir-pro-version').textContent=initial.version||'1.0.1';
+      this.shadowRoot.getElementById('ir-pro-version').textContent=initial.version||'1.0.2';
       this._controller=mountStudio(this.shadowRoot.getElementById('ir-remote-studio'),api,initial,!!this._hass.user?.is_admin,()=>this.dispatchEvent(new CustomEvent('hass-toggle-menu',{bubbles:true,composed:true})));
     }catch(error){if(generation!==this._generation)return;this._viewAbort?.abort();this._colorControlsDispose?.();this._colorControlsDispose=null;this.shadowRoot.innerHTML='<style>:host{display:block;padding:24px;font-family:Roboto,sans-serif;color:var(--primary-text-color)}button{font:inherit;padding:10px}</style><p id="load-error" role="alert"></p><button type="button">Volver a intentar</button>';this.shadowRoot.getElementById('load-error').textContent=error.message||'No se ha podido conectar con IR Pro.';this.shadowRoot.querySelector('button').addEventListener('click',()=>this._load());}
     finally{if(generation===this._generation)this._loading=false;}

@@ -84,7 +84,7 @@ function harness(){
  vm.createContext(scope);
  const options=source.slice(source.indexOf('  const clamp ='),source.indexOf('  const button ='));
  const constructors=source.slice(source.indexOf('  const button ='),source.indexOf('  function validateDevice'));
- const constants=['entitySlug','entityDomain','selectOptions','field','checkField'].map(constant).join('\n');
+ const constants=['entitySlug','entityDomain','selectOptions','actionSelectOptions','field','checkField'].map(constant).join('\n');
  vm.runInContext(options+'\n'+constructors+'\n'+constants+'\n'+['automationButtons','entityTaken','ensureModelEntities','getButton','buttonSymbol','findEmpty','closeModal','openNeutralDialog','showModal','confirmEntityChanges','formError','editButton','persist'].map(extract).join('\n'),scope);
  vm.runInContext('globalThis.model={version:1,emitters:[{id:"editor-emitter",sourceId:"source",name:"IR salón",devices:[newRemote("Televisor","tv")]}]};ensureModelEntities();',scope);
  const initial=exportModel(scope.model);for(const fn of initial.emitters[0].devices[0].functions){fn.signal_refs=fn.type==='switch'?{on:'original-on',off:'original-off'}:{press:'original-'+fn.key};fn.signals=Object.fromEntries(Object.keys(fn.signal_refs).map(signal=>[signal,true]));}
@@ -98,6 +98,42 @@ function harness(){
  return {scope,calls,messages,device,edit,control,change,button,confirmation};
 }
 const tick=()=>new Promise(resolve=>setImmediate(resolve));
+
+const assertActionSelector=select=>{
+ assert.deepEqual(select.children.slice(0,3).map(child=>[child.tagName,child.value]),[['OPTION','learned'],['OPTION','send_state'],['HR','']]);
+ assert.equal(select.children[2].className,'action-separator');
+ assert.equal(select.children.filter(child=>child.tagName==='HR').length,1);
+ assert.equal(select.children[0].textContent,'Enviar una señal aprendida');assert.equal(select.children[1].textContent,'Enviar señal de ajustes del mando');
+ assert.ok(select.querySelectorAll('option').every(option=>option.value&&option.disabled===false),'The separator is not a selectable fake option');
+};
+
+// All three action selectors show the two direct sending choices first and one
+// native separator before the setting-changing actions.
+{
+ const h=harness();h.edit(h.device().rows[0].cells[1].id);assertActionSelector(h.control('[data-dual-field="action"]'));await h.button('Cancelar').click();
+ h.edit(h.device().rows[1].cells[0].id);assertActionSelector(h.control('#button-action'));
+ await h.change('#function-type','group');assert.equal(h.control('#group-kind').value,'custom');await h.control('#add-folder-child').click();assert.equal(h.scope.modalBody.querySelectorAll('[data-child-action]').length,1,'The first add click uses the current child array after parent identity replacement');assertActionSelector(h.control('[data-child-action]'));await h.button('Cancelar').click();assert.deepEqual(h.calls,[]);
+}
+
+// Choosing a generic current-state signal on a saved TV promotes its editing
+// capabilities only after confirmation; the sending control has no own entity.
+{
+ const h=harness(),original=h.device().rows[1].cells[0];h.edit(original.id);await h.change('#button-action','send_state');
+ assert.equal(h.device().type,'simple');assert.match(h.control('#action-fields').innerHTML,/sin cambiar sus valores/);
+ const saving=h.button('Guardar cambios').click();await tick();assert.ok(h.confirmation());assert.deepEqual(h.calls,[]);await h.confirmation().querySelector('[data-confirm]').click();await saving;
+ const saved=h.device().rows[1].cells[0],functions=h.calls[0][1].model.emitters[0].devices[0].functions;
+ assert.equal(h.device().type,'stateful');assert.equal(saved.action,'send_state');assert.notEqual(saved.id,original.id);assert.ok(!saved.entity);assert.ok(!functions.some(fn=>fn.key===saved.id||fn.key===original.id));assert.equal(functions.length,16);
+}
+
+// A child added on the first click remains the live draft child through action
+// and name changes, confirmation and canonical persistence of its new folder.
+{
+ const h=harness(),original=h.device().rows[1].cells[0];h.edit(original.id);await h.change('#function-type','group');await h.control('#add-folder-child').click();
+ await h.change('[data-child-action]','send_state');await h.change('[data-child-name]','Enviar ajustes','input');const childId=h.control('[data-child-entity]').dataset.childEntity;
+ const saving=h.button('Guardar cambios').click();await tick();await h.confirmation().querySelector('[data-confirm]').click();await saving;
+ const group=h.device().rows[1].cells[0],functions=h.calls[0][1].model.emitters[0].devices[0].functions;
+ assert.equal(group.type,'group');assert.equal(group.group,'custom');assert.equal(group.children.length,1);assert.equal(group.children[0].id,childId);assert.equal(group.children[0].name,'Enviar ajustes');assert.equal(group.children[0].action,'send_state');assert.equal(h.device().type,'stateful');assert.ok(!functions.some(fn=>fn.key===childId||fn.key===group.id||fn.key===original.id));
+}
 
 // A saved TV has an enabled function selector and all action choices. Merely
 // changing the draft, or cancelling the editor, leaves the server untouched.

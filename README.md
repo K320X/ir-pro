@@ -4,7 +4,7 @@
 
 Visual infrared remotes for Home Assistant.
 
-**1.0.1 stable** includes editable remotes, air conditioner and television starting layouts, displays and learned states. IR Pro starts empty: it does not import demo remotes, modify your existing scripts or take over physical devices. Upgrading preserves existing remotes, learned signals and entity identifiers.
+**1.0.2 stable** includes editable remotes, air conditioner and television starting layouts, displays and learned states. IR Pro starts empty: it does not import demo remotes, modify your existing scripts or take over physical devices. Upgrading preserves existing remotes, learned signals and entity identifiers.
 
 Build your own remotes with buttons, dual actions, folders, optional labels, icon previews, colors and independent grid rows. Learn commands from a physical remote, save them directly and expose real Home Assistant entities for automations. Testing a signal is optional.
 
@@ -50,6 +50,8 @@ The initial layout is applied only when the device is created. Changing an exist
 Both air conditioner icons create the same compact starting layout: a white display, mode, one combined on/off button, five fan speeds with automatic mode, temperature controls, six swing positions with oscillation and disabled options, and a centered light button. Swing starts as an independent action folder; mode, power, temperature and fan use complete learned states. Every element can be edited or removed. Existing layouts are preserved. Fan folders can be configured for two to five speeds.
 
 To learn a state, first prepare the settings in IR Pro and on the physical remote. Select **Aprender estado**. For an on state, start with the physical remote off, point it at the transmitter and press **Encender** with the intended settings. For the off state, press **Apagar**. A temperature or fan key may not include the instruction to turn the appliance on. Save after the signal is received. Each learned state appears in the state/entity table as a real `button` entity. The off state is independent of temperature, mode, fan and swing. Copy the entity ID to use it in automations.
+
+Choose **Enviar señal de ajustes del mando** on a button, either side of a dual button or a custom folder child to send the learned signal matching the current settings without changing them first. This action uses the same controlled fields as state learning, excludes independent settings, and uses the off recording when power is off. It sends nothing if no matching state has been learned. The action selector groups this option with **Enviar una señal aprendida**, above a light separator and the setting-change actions.
 
 Changing a setting can send its matching learned state; IR Pro does not guess or synthesize unknown IR protocols. If the combination has no learned signal, it must be learned before it can control the appliance. Preparing temperature, mode, fan or swing while the remote is off does not turn the appliance on. Loading, saving, duplicating and restarting never send IR automatically.
 

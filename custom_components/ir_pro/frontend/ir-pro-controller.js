@@ -1,8 +1,8 @@
-import {icon} from './ir-pro-icons.js?v=1.0.1';
-import {importModel,exportModel,reconcileCanonical,independentStateEffect,linkedActionEffect,actionStateField,controlledStateFields,recordStateFields,projectState,scopedStateKey,stateRecordMatches,findSavedState} from './ir-pro-model.js?v=1.0.1';
-import {mountIconPickers} from './ir-pro-pickers.js?v=1.0.1';
-import {createModalScrollLock} from './ir-pro-modal-scroll.js?v=1.0.1';
-import {createControlEditor,controlNeedsState} from './ir-pro-editing.js?v=1.0.1';
+import {icon} from './ir-pro-icons.js?v=1.0.2';
+import {importModel,exportModel,reconcileCanonical,independentStateEffect,linkedActionEffect,actionStateField,controlledStateFields,recordStateFields,projectState,scopedStateKey,stateRecordMatches,findSavedState} from './ir-pro-model.js?v=1.0.2';
+import {mountIconPickers} from './ir-pro-pickers.js?v=1.0.2';
+import {createModalScrollLock} from './ir-pro-modal-scroll.js?v=1.0.2';
+import {createControlEditor,controlNeedsState} from './ir-pro-editing.js?v=1.0.2';
 export function mountStudio(root,api,initial,isAdmin,openMenu) {
   const scope=root.getRootNode(),lifecycle=new AbortController();
   let disposed=false,catalog=initial.catalog||[],revision=initial.revision||0,saveQueue=Promise.resolve(true),saveFailed=false,actionError='',signalBusy=false,independentSending=false,operation=0,pendingSaves=0,unsubscribe=null,lastAmbientSnapshot='',deferredEnvelope=null,scrollGeneration=0,inputGeneration=0,lastRenderedRoute='';
@@ -37,7 +37,7 @@ export function mountStudio(root,api,initial,isAdmin,openMenu) {
   const deviceIcons = [{value:'air-vent',name:'Aire acondicionado (split)'},{value:'wind',name:'Aire acondicionado'},{value:'tv',name:'Televisor'},{value:'remote',name:'Mando'},{value:'fan',name:'Ventilador'},{value:'light',name:'Iluminación'}];
   symbols.push(...[{value:'chevron-up',name:'Flecha arriba'},{value:'chevron-down',name:'Flecha abajo'},{value:'timer',name:'Temporizador'},{value:'timer-off',name:'Cancelar temporizador'},{value:'volume-2',name:'Volumen'},{value:'move-vertical',name:'Movimiento vertical'},{value:'move-horizontal',name:'Movimiento horizontal'},{value:'droplets',name:'Humedad'},{value:'lightbulb',name:'Bombilla'},{value:'zap',name:'Potencia'},{value:'leaf',name:'Ahorro'}]);
   symbols.push({value:'tv-input',name:'Fuente de televisión'},{value:'volume-off',name:'Silencio'});
-  const actionOptions = [{value:'learned',name:'Enviar una señal aprendida'},{value:'power_on',name:'Encender'},{value:'power_off',name:'Apagar'},{value:'temp_up',name:'Subir temperatura'},{value:'temp_down',name:'Bajar temperatura'},{value:'set_mode',name:'Seleccionar un modo'},{value:'set_fan',name:'Seleccionar una velocidad'},{value:'set_swing',name:'Seleccionar posición u oscilación'},{value:'swing',name:'Activar o desactivar oscilación'}];
+  const actionOptions = [{value:'learned',name:'Enviar una señal aprendida'},{value:'send_state',name:'Enviar señal de ajustes del mando'},{value:'power_on',name:'Encender'},{value:'power_off',name:'Apagar'},{value:'temp_up',name:'Subir temperatura'},{value:'temp_down',name:'Bajar temperatura'},{value:'set_mode',name:'Seleccionar un modo'},{value:'set_fan',name:'Seleccionar una velocidad'},{value:'set_swing',name:'Seleccionar posición u oscilación'},{value:'swing',name:'Activar o desactivar oscilación'}];
   const actionValueChoices = action => action==='set_mode'?modes:action==='set_fan'?fans:action==='set_swing'?swingStates:null;
   const actionValueLabel = action => action==='set_mode'?'Modo':action==='set_fan'?'Velocidad':'Posición u oscilación';
   const defaultActionValue = action => action==='set_mode'?'cool':['set_fan','set_swing'].includes(action)?'auto':'';
@@ -340,6 +340,7 @@ export function mountStudio(root,api,initial,isAdmin,openMenu) {
     return ()=>{restore();requestAnimationFrame(restore);};
   }
   const selectOptions = (items,value) => items.map(item=>'<option value="'+esc(item.value)+'"'+(item.value===value?' selected':'')+'>'+esc(item.name)+'</option>').join('');
+  const actionSelectOptions = (items,value) => selectOptions(items.slice(0,2),value)+'<hr class="action-separator">'+selectOptions(items.slice(2),value);
   const field = (label,html) => '<label class="field"><span>'+esc(label)+'</span>'+html+'</label>';
   const checkField = (key,label,checked) => '<label class="choice small"><input type="checkbox" name="'+esc(key)+'"'+(checked?' checked':'')+'> '+esc(label)+'</label>';
   function closeModal() {if (modal.open) modal.close();}
@@ -653,6 +654,17 @@ export function mountStudio(root,api,initial,isAdmin,openMenu) {
       adoptCommandEnvelope(result,d,sourceId);render();toast('Señal enviada · '+b.name);return true;
     });}finally{independentSending=false;}
   }
+  async function sendCurrentState(d) {
+    const state=copy(d.state),fields=controlledStateFields(d,state),sourceId=emitterFor(d.id)?.sourceId;
+    if(!fields.length){toast('Todos los ajustes se controlan por separado. No hay una señal de ajustes del mando que enviar.');return false;}
+    if(!savedStateFor(d,state,fields)?.signal){toast('Sin señal. Aprende primero estos ajustes del mando.');return false;}
+    independentSending=true;
+    try{return await queuePhysical(async()=>{
+      const result=await api.call('send_state',{device_id:d.id,state,controlled_fields:fields});
+      if(disposed)return false;
+      adoptCommandEnvelope(result,d,sourceId);render();toast('Señal de ajustes del mando enviada · Estado estimado');return true;
+    });}finally{independentSending=false;}
+  }
   async function executeAction(d,b) {
     if(independentSending){toast('Espera a que termine el envío.');return false;}
     if(signalBusy){toast('Espera a que termine el aprendizaje.');return false;}
@@ -676,7 +688,7 @@ export function mountStudio(root,api,initial,isAdmin,openMenu) {
         const currentDevice=model.emitters.find(emitter=>emitter.sourceId===sourceId&&emitter.devices.some(device=>device.id===d.id))?.devices.find(device=>device.id===d.id);
         const locate=node=>{if(node?.id===b.id)return node;if(node?.type==='group'&&node.group==='custom')for(const child of node.children||[]){const found=locate(child);if(found)return found;}};
         const current=currentDevice?.rows.flatMap(row=>row.cells||[]).map(locate).find(Boolean);
-        if(current?.type==='dual'&&current._existingType!=='switch'&&current.sendMode!=='independent'&&current.activeSide===index&&JSON.stringify(dualActions(current,currentDevice).map(action=>[action.action,action.value||'']))===signature){current.activeSide=1-index;const saved=await persist();render();return saved;}
+        if(current?.type==='dual'&&current._existingType!=='switch'&&(current.sendMode!=='independent'||side.action==='send_state')&&current.activeSide===index&&JSON.stringify(dualActions(current,currentDevice).map(action=>[action.action,action.value||'']))===signature){current.activeSide=1-index;const saved=await persist();render();return saved;}
       }
       return success;
     }
@@ -689,6 +701,7 @@ export function mountStudio(root,api,initial,isAdmin,openMenu) {
       if(independentStateEffect(b))return executeIndependent(d,b);
       return queuePhysical(async()=>{if(!b.id)throw new Error('Esta función no tiene una señal aprendida.');await api.call('press',{function_key:b.id});if(!disposed)toast('Señal enviada · '+b.name);return true;});
     }
+    if(b.action==='send_state')return sendCurrentState(d);
     const s=d.state,fields=controlledStateFields(d,{...d.state,power:true}),field=actionStateField(b),separate=field&&!fields.includes(field);
     const separateHint=' · Este ajuste se controla por separado. Configura su señal independiente o vuelve sus controles a Ajustes del mando.';let label='Ajustes actualizados';
     if (b.action==='power_on') {s.power=true;return commitState(d,'Encendido · '+stateText(d)+(separate?separateHint:''),!separate);}
@@ -799,7 +812,7 @@ export function mountStudio(root,api,initial,isAdmin,openMenu) {
     return new Promise(resolve=>{
       const dialog=document.createElement('dialog');dialog.className='signal-delete-modal';let accepted=false;
       dialog.innerHTML='<header class="modal-head"><h2>Confirmar cambios de entidades</h2></header><div class="modal-body">'+
-        (removed.length?'<p>Se eliminarán estas entidades al sustituir las funciones:</p><ul>'+removed.map(node=>'<li><code>'+esc(node.entity)+'</code></li>').join('')+'</ul><p>Las nuevas funciones necesitarán sus propias señales aprendidas.</p>':'')+
+        (removed.length?'<p>Se eliminarán estas entidades al sustituir las funciones:</p><ul>'+removed.map(node=>'<li><code>'+esc(node.entity)+'</code></li>').join('')+'</ul><p>Las nuevas funciones no heredarán las señales aprendidas de las funciones sustituidas.</p>':'')+
         (renamed.length?'<p>Se cambiarán estos identificadores, conservando sus señales:</p><ul>'+renamed.map(change=>'<li><code>'+esc(change.before)+'</code> → <code>'+esc(change.after)+'</code></li>').join('')+'</ul>':'')+
         '<div class="warning"><span aria-hidden="true">⚠</span><div><strong>Revisa tus automatizaciones.</strong><p>Las automatizaciones, scripts y paneles que usen los identificadores anteriores tendrán que actualizarse.</p></div></div></div><footer class="modal-foot"><button type="button" class="btn" data-cancel>Cancelar</button><button type="button" class="btn danger" data-confirm>Aplicar cambios</button></footer>';
       root.appendChild(dialog);dialog.querySelector('[data-cancel]').onclick=()=>dialog.close();dialog.querySelector('[data-confirm]').onclick=()=>{accepted=true;dialog.close();};
@@ -971,7 +984,7 @@ export function mountStudio(root,api,initial,isAdmin,openMenu) {
         field('Nombre','<input data-dual-index="'+index+'" data-dual-field="name" maxlength="40" value="'+esc(side.name)+'">')+
         '<label class="dual-show-name"><input type="checkbox" data-dual-index="'+index+'" data-dual-field="showName"'+(side.showName?' checked':'')+'>Mostrar texto</label>'+
         '<div class="form-grid">'+field('Icono','<select data-dual-index="'+index+'" data-dual-field="icon">'+selectOptions(symbols,side.icon)+'</select>')+field('Color','<input type="color" data-dual-index="'+index+'" data-dual-field="color" value="'+esc(side.color)+'">')+'</div>'+
-        field('Acción al pulsar','<select data-dual-index="'+index+'" data-dual-field="action">'+selectOptions(allowedActions,side.action)+'</select>')+
+        field('Acción al pulsar','<select data-dual-index="'+index+'" data-dual-field="action">'+actionSelectOptions(allowedActions,side.action)+'</select>')+
         (actionValueChoices(side.action)?field(actionValueLabel(side.action),'<select data-dual-index="'+index+'" data-dual-field="value">'+selectOptions(actionValueChoices(side.action),side.value||defaultActionValue(side.action))+'</select>'):'')+'</fieldset>';
       }).join('')+'</div><p class="dual-state-hint muted small">'+(dualPowerLinked(d,draft)?'Comparte el estado de encendido con la pantalla. Otro botón de encender o apagar también actualizará su aspecto.':'Alterna entre las dos acciones al pulsarlo.')+'</p>';
       $$('[data-dual-field]',target).forEach(input=>{
@@ -990,8 +1003,9 @@ export function mountStudio(root,api,initial,isAdmin,openMenu) {
     };
     const renderChildren=()=>{
       const target=$('#folder-children');if(!target)return;
+      prepareDraft();
       const children=draft.children;
-      target.innerHTML=children.map((child,index)=>'<div class="child-config">'+field('Nombre','<input data-child-name="'+index+'" value="'+esc(child.name)+'" maxlength="40">')+'<label class="dual-show-name"><input type="checkbox" data-child-show="'+index+'"'+(child.showName!==false?' checked':'')+'>Mostrar texto</label>'+field('Icono','<select data-child-icon="'+index+'">'+selectOptions(symbols,child.icon)+'</select>')+field('Acción','<select data-child-action="'+index+'">'+selectOptions(allowedActions,child.action)+'</select>')+(actionValueChoices(child.action)?field(actionValueLabel(child.action),'<select data-child-value="'+index+'">'+selectOptions(actionValueChoices(child.action),child.value||defaultActionValue(child.action))+'</select>'):'')+(independentChoices(child).length?field('Cómo envía la señal','<select data-child-send-mode="'+index+'">'+selectOptions(sendModeOptions,child.sendMode==='independent'?'independent':'settings')+'</select>')+'<p class="muted small">'+sendModeHint+'</p>':'')+'<div data-child-entity="'+esc(child.id)+'"></div><button class="btn text" data-remove-child="'+index+'">'+glyph('trash')+'Quitar botón</button></div>').join('')+'<button class="btn" id="add-folder-child">'+glyph('plus')+'Añadir botón a la carpeta</button>';
+      target.innerHTML=children.map((child,index)=>'<div class="child-config">'+field('Nombre','<input data-child-name="'+index+'" value="'+esc(child.name)+'" maxlength="40">')+'<label class="dual-show-name"><input type="checkbox" data-child-show="'+index+'"'+(child.showName!==false?' checked':'')+'>Mostrar texto</label>'+field('Icono','<select data-child-icon="'+index+'">'+selectOptions(symbols,child.icon)+'</select>')+field('Acción','<select data-child-action="'+index+'">'+actionSelectOptions(allowedActions,child.action)+'</select>')+(actionValueChoices(child.action)?field(actionValueLabel(child.action),'<select data-child-value="'+index+'">'+selectOptions(actionValueChoices(child.action),child.value||defaultActionValue(child.action))+'</select>'):'')+(independentChoices(child).length?field('Cómo envía la señal','<select data-child-send-mode="'+index+'">'+selectOptions(sendModeOptions,child.sendMode==='independent'?'independent':'settings')+'</select>')+'<p class="muted small">'+sendModeHint+'</p>':'')+'<div data-child-entity="'+esc(child.id)+'"></div><button class="btn text" data-remove-child="'+index+'">'+glyph('trash')+'Quitar botón</button></div>').join('')+'<button class="btn" id="add-folder-child">'+glyph('plus')+'Añadir botón a la carpeta</button>';
       $$('[data-child-name]',target).forEach(input=>input.addEventListener('input',()=>{children[Number(input.dataset.childName)].name=input.value;renderEntityFields();},{signal:modalAbort.signal}));
       $$('[data-child-show]',target).forEach(input=>input.addEventListener('change',()=>children[Number(input.dataset.childShow)].showName=input.checked,{signal:modalAbort.signal}));
       $$('[data-child-icon]',target).forEach(input=>input.addEventListener('change',()=>children[Number(input.dataset.childIcon)].icon=input.value,{signal:modalAbort.signal}));
@@ -1032,7 +1046,7 @@ export function mountStudio(root,api,initial,isAdmin,openMenu) {
       } else {
         if(!allowedActions.some(action=>action.value===draft.action))draft.action=allowedActions[0].value;
         if(actionValueChoices(draft.action)&&!actionValueChoices(draft.action).some(option=>option.value===draft.value))draft.value=defaultActionValue(draft.action);
-        target.innerHTML=field('Acción','<select id="button-action">'+selectOptions(allowedActions,draft.action)+'</select>')+(actionValueChoices(draft.action)?field(actionValueLabel(draft.action),'<select id="action-value">'+selectOptions(actionValueChoices(draft.action),draft.value||defaultActionValue(draft.action))+'</select>'):draft.action==='learned'?'<p class="muted small">Aprende la señal del mando original. Probarla es opcional; puedes guardarla en cuanto se reciba.</p>':'');
+        target.innerHTML=field('Acción','<select id="button-action">'+actionSelectOptions(allowedActions,draft.action)+'</select>')+(actionValueChoices(draft.action)?field(actionValueLabel(draft.action),'<select id="action-value">'+selectOptions(actionValueChoices(draft.action),draft.value||defaultActionValue(draft.action))+'</select>'):draft.action==='send_state'?'<p class="muted small">Envía la señal aprendida que corresponde a los ajustes actuales del mando, sin cambiar sus valores.</p>':draft.action==='learned'?'<p class="muted small">Aprende la señal del mando original. Probarla es opcional; puedes guardarla en cuanto se reciba.</p>':'');
         $('#button-action')?.addEventListener('change',event=>{draft.action=event.target.value;draft.value=defaultActionValue(draft.action);renderActionFields();},{signal:modalAbort.signal});
         $('#action-value')?.addEventListener('change',event=>{draft.value=event.target.value;renderEntityFields();},{signal:modalAbort.signal});
       }
