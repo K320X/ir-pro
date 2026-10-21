@@ -4,7 +4,7 @@
 
 Visual infrared remotes for Home Assistant.
 
-**0.2.0 beta** adds editable remotes with settings, displays and learned states. IR Pro starts empty: it does not import demo remotes, modify your existing scripts or take over physical devices. Upgrading preserves existing remotes, learned signals and entity identifiers.
+**1.0.0 stable** includes editable remotes, air conditioner and television starting layouts, displays and learned states. IR Pro starts empty: it does not import demo remotes, modify your existing scripts or take over physical devices. Upgrading preserves existing remotes, learned signals and entity identifiers.
 
 Build your own remotes with buttons, dual actions, folders, optional labels, icon previews, colors and independent grid rows. Learn commands from a physical remote, save them directly and expose real Home Assistant entities for automations. Testing a signal is optional.
 
@@ -14,7 +14,7 @@ Requires Home Assistant **2026.10 or later**, HACS and a supported Broadlink rem
 
 1. Open **HACS → menu → Custom repositories**.
 2. Add `https://github.com/K320X/ir-pro` with type **Integration**.
-3. Open **IR Pro** and download the release. For beta versions, enable prereleases or select the beta explicitly.
+3. Open **IR Pro** and download the latest stable release. Prereleases are not required for version 1.0.0.
 4. Restart Home Assistant.
 5. Go to **Settings → Devices & services → Add integration → IR Pro**.
 6. Open **IR Pro** in the sidebar. Select **Añadir emisor** to start.
@@ -25,17 +25,23 @@ This repository is installed as a custom HACS repository; it is not listed in th
 
 ## First remote
 
-1. Add a recognized transmitter, then create a device with its name and icon.
-2. Open **Editar mando** and add a function. Choose a button for a single action, or a dual-action button with separate on/off commands.
+1. Add a recognized transmitter, then create a device with its name and icon. The icon selects its initial editable layout.
+2. Open **Editar mando** to adjust the starting controls or add a function. Choose a button for a single action, or a dual-action button with separate on/off commands.
 3. Select **Aprender del mando original**, point the original remote at the Broadlink and press the required key.
 4. Select **Guardar cambios** to keep the learned signal. **Probar señal** is optional and sends the command only when selected.
 5. Find the function's entity under **Entidad para automatizaciones**. It can be used by Home Assistant automations and scripts.
 
 Changes are stored in Home Assistant, not in browser storage. Transmitter selection uses stable entity registry IDs. Renaming a remote or function does not automatically change an existing entity ID.
 
+## Starting layouts
+
+Creation asks for a name and icon. The two air conditioner icons are adjacent, with the split icon first, and both choose the air conditioner layout. The television icon chooses a three-column layout with compact height-one controls: one dual-action power button, volume, mute, channel, source and digits 1–9 with 0 centered below. Television controls learn separate signals and do not use a complete-state display or recording panel. The power control exposes a Home Assistant switch with separately learned on/off signals; its state is estimated.
+
+The initial layout is applied only when the device is created. Changing an existing device's name or icon preserves its layout, operating profile, learned signals and entities. Each new remote receives its own identities and starts with signals waiting to be learned.
+
 ## Remotes with states
 
-When creating a device, choose **Mando con estados** for equipment such as an air conditioner that sends its complete configuration in an IR message. The editable starting layout includes a display, mode, one combined on/off button, five fan speeds with automatic mode, temperature controls, six swing positions with oscillation and disabled options, and a light button. Every element can be edited or removed. Existing layouts are preserved. Fan folders can be configured for two to five speeds.
+Both air conditioner icons create the same compact starting layout: a white display, mode, one combined on/off button, five fan speeds with automatic mode, temperature controls, six swing positions with oscillation and disabled options, and a centered light button. Swing starts as an independent action folder; mode, power, temperature and fan use complete learned states. Every element can be edited or removed. Existing layouts are preserved. Fan folders can be configured for two to five speeds.
 
 To learn a state, first prepare the settings in IR Pro and on the physical remote. Select **Aprender estado**. For an on state, start with the physical remote off, point it at the transmitter and press **Encender** with the intended settings. For the off state, press **Apagar**. A temperature or fan key may not include the instruction to turn the appliance on. Save after the signal is received. Each learned state appears in the state/entity table as a real `button` entity. The off state is independent of temperature, mode, fan and swing. Copy the entity ID to use it in automations.
 
@@ -47,7 +53,7 @@ Use **Borrar todos los estados** below the state/entity table to permanently rem
 
 The display shows the remote's estimated settings, not confirmation from the appliance. Available temperature and humidity readings from the transmitter's Home Assistant device are shown separately as room measurements. Missing or unavailable measurements are omitted.
 
-## Beta scope and limitations
+## Supported devices and limitations
 
 - Initially supports learning and sending through **Broadlink `remote` entities**. Other IR adapters are not supported yet.
 - IR is normally one-way. A successful send does not confirm delivery; switch state is estimated.
@@ -55,9 +61,9 @@ The display shows the remote's estimated settings, not confirmation from the app
 - Many air conditioner remotes send the full configuration in one message. Use a remote with settings and learn complete states for those appliances. A simple learned “temperature up” key can otherwise replay a fixed temperature, mode and fan setting.
 - Duplicating preserves layout and presentation. Signals can be reused on the same transmitter. A copy created under another transmitter must learn its signals there; copying a flag cannot transfer Broadlink's stored codes.
 - Existing remotes cannot be moved between transmitters. Create a copy at its destination so the original entities remain intact.
-- Existing entity IDs and entity types cannot be changed in this beta. Choose them when creating a function; visible names remain editable.
+- Existing entity IDs and entity types cannot be changed. Choose them when creating a function; visible names remain editable.
 - Removing a function or remote is permanent. References in automations, scripts or dashboards must be reviewed. Removing an emitter from IR Pro does not remove the physical Broadlink integration.
-- Deletion removes IR Pro metadata and its own entities. This beta leaves previously learned commands in Broadlink's storage; deleted functions can no longer call them through IR Pro.
+- Deletion removes IR Pro metadata and its own entities. Previously learned commands remain in Broadlink's storage; deleted functions can no longer call them through IR Pro.
 - The management panel requires administrator access. Normal entity use follows Home Assistant permissions.
 
 ## Updates and recovery
@@ -66,7 +72,7 @@ Create a Home Assistant backup before installing or updating a custom integratio
 
 For an update:
 
-1. Publish/install a tagged GitHub release. In HACS, enable prereleases for IR Pro if you want beta updates.
+1. Install a tagged stable GitHub release through HACS. Enable prereleases only if you intentionally want future test versions.
 2. When HACS detects the release, **Settings → System → Updates** shows the IR Pro update. Select it and choose **Install**. You can also update from IR Pro's HACS repository page.
 3. Restart Home Assistant when the installation finishes, then reload the browser or app to load the new panel assets.
 4. Open IR Pro and check your existing remotes and entities. If the release is not listed yet, use **Update information** on the repository's HACS menu.

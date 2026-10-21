@@ -159,7 +159,7 @@ console.log('Independent folders: stable option identities, hidden capacity/mode
 
 // Build the actual default remote: its dual labels describe the CURRENT state,
 // so the side labelled Apagado must learn Encender, never an off command.
-vm.runInContext(['symbols','actionOptions','actionValueChoices','defaultActionValue'].map(name=>source.split('\n').find(line=>line.trimStart().startsWith('const '+name+' ='))).join('\n')+'\n'+source.slice(source.indexOf('  const row ='),source.indexOf('  function validateDevice'))+'\nglobalThis.generic=newRemote("Genérico","wind","stateful");',context);
+vm.runInContext(['symbols','actionOptions','actionValueChoices','defaultActionValue'].map(name=>source.split('\n').find(line=>line.trimStart().startsWith('const '+name+' ='))).join('\n')+'\n'+source.slice(source.indexOf('  const row ='),source.indexOf('  function validateDevice'))+'\nglobalThis.generic=newRemote("Genérico","wind");',context);
 context.control=context.generic.rows[1].cells[1];context.control.sendMode='independent';run('ensureIndependentActions(control)');
 const powerChildren=context.control.independentActions;
 assert.equal(context.control.actions[0].name,'Apagado');assert.equal(powerChildren[0].name,'Encender');assert.deepEqual(independentStateEffect(powerChildren[0]),{power:true});assert.equal(powerChildren[0].value,'power_on');assert.equal(powerChildren[1].name,'Apagar');

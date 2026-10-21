@@ -3,7 +3,7 @@ import {readFileSync} from 'node:fs';
 import vm from 'node:vm';
 import {randomUUID} from 'node:crypto';
 import {styles} from '../custom_components/ir_pro/frontend/ir-pro-theme.js';
-import {exportModel,importModel,STATE_FIELDS,controlledStateFields,recordStateFields,projectState,stateRecordMatches,findSavedState} from '../custom_components/ir_pro/frontend/ir-pro-model.js';
+import {exportModel,importModel,STATE_FIELDS,controlledStateFields,recordStateFields,projectState,stateRecordMatches,findSavedState,independentStateEffect} from '../custom_components/ir_pro/frontend/ir-pro-model.js';
 import {icon as renderIcon} from '../custom_components/ir_pro/frontend/ir-pro-icons.js';
 
 // Execute the actual controller render functions. This catches reentrant routing
@@ -59,21 +59,95 @@ assert.equal(notice.textContent,'Entidad copiada.');assert.equal(notice.hidden,f
 const primaryRules=styles.match(/\.btn\.primary(?::hover)?\{[^}]*\}/g);
 assert.ok(primaryRules?.length);assert.ok(primaryRules.filter(rule=>rule.includes('color:')).every(rule=>rule.includes('color:#0f1721')));
 
-// Run the real factory, keeping preexisting remotes untouched. Only the learned
-// accessory creates an entity; display, folders and dual power are state controls.
-const beforeFactory=JSON.stringify(context.model);context.uid=randomUUID;
+// Run the real factory without touching existing devices or copying any learned
+// signal. Only creation chooses a template; the two AC icons share one layout.
+const beforeFactory=JSON.stringify(context.model);context.uid=randomUUID;context.copy=structuredClone;context.independentStateEffect=independentStateEffect;
+const factoryOptions=source.slice(source.indexOf('  const clamp ='),source.indexOf('  const button ='));
 const constructors=source.slice(source.indexOf('  const button ='),source.indexOf('  function validateDevice'));
-vm.runInContext(constructors+"\nglobalThis.freshRemote=newRemote('Aire nuevo','wind','stateful');",context);
+vm.runInContext(factoryOptions+'\n'+constructors+"\nglobalThis.freshRemote=newRemote('Aire nuevo','wind');globalThis.splitRemote=newRemote('Split nuevo','air-vent');globalThis.tvRemote=newRemote('Televisor nuevo','tv');",context);
 const fresh=JSON.parse(JSON.stringify(context.freshRemote));assert.equal(JSON.stringify(context.model),beforeFactory);
 assert.deepEqual(fresh.state,{power:false,mode:'cool',temperature:24,fan:'auto',swing:'off'});
-assert.equal(fresh.rows[0].type,'display');assert.equal(fresh.rows[0].style,'modern');assert.equal(fresh.rows[0].accent,'#f4f6f8');
-assert.deepEqual(fresh.rows.slice(1).map(row=>row.cells.map(node=>node?.name||null)),[['Modo','Encendido del aire','Ventilador'],['Bajar','Oscilación','Subir'],[null,'Luz',null]]);
-const dual=fresh.rows[1].cells[1],fan=fresh.rows[1].cells[2],swing=fresh.rows[2].cells[1],light=fresh.rows[3].cells[1];
+assert.equal(fresh.type,'stateful');assert.equal(fresh.rows[0].type,'display');assert.equal(fresh.rows[0].style,'modern');assert.equal(fresh.rows[0].accent,'#ffffff');assert.equal(fresh.rows[0].height,2);assert.equal(fresh.rows[0].width,3);
+assert.deepEqual(fresh.rows.slice(1).map(row=>row.cells.map(node=>node?.name||null)),[['Modo','Encendido/apagado','Ventilador'],['Bajar','Oscilación','Subir'],['Luz']]);
+assert.ok(fresh.rows.slice(1).every(row=>row.height===1));assert.equal(fresh.rows[3].columns,1);
+const dual=fresh.rows[1].cells[1],fan=fresh.rows[1].cells[2],swing=fresh.rows[2].cells[1],light=fresh.rows[3].cells[0];
 assert.equal(dual.type,'dual');assert.deepEqual(dual.actions.map(action=>[action.name,action.icon,action.action]),[['Apagado','power-off','power_on'],['Encendido','power','power_off']]);
 assert.equal(fan.fanSpeedCount,5);assert.equal(fan.fanAuto,true);assert.equal(swing.swingPositionCount,6);assert.equal(swing.swingAuto,true);assert.equal(swing.swingOff,true);
+assert.equal(swing.sendMode,'independent');assert.equal(fan.sendMode,'settings');assert.equal(dual.sendMode,'settings');
+assert.equal(swing.independentActions.length,8);assert.deepEqual(swing.independentActions.map(node=>independentStateEffect(node)),['position_1','position_2','position_3','position_4','position_5','position_6','auto','off'].map(value=>({swing:value})));
+assert.ok(swing.independentActions.every(node=>node.action==='learned'&&!node.entity&&!node.signals&&!node.signal_refs));
+assert.deepEqual(controlledStateFields(fresh),['power']);assert.deepEqual(controlledStateFields(fresh,{...fresh.state,power:true}),['power','mode','temperature','fan']);
+const withoutIdentity=device=>JSON.stringify(device,(key,value)=>['id','name','icon'].includes(key)?undefined:value);
+assert.equal(withoutIdentity(fresh),withoutIdentity(context.splitRemote));
+const generatedIds=device=>[device.id,...device.rows.flatMap(row=>[row.id,...(row.cells||[]).filter(Boolean).flatMap(node=>[node.id,...(node.independentActions||[]).map(child=>child.id)])])];
+assert.equal(new Set([...generatedIds(fresh),...generatedIds(context.splitRemote)]).size,generatedIds(fresh).length+generatedIds(context.splitRemote).length);
+const tv=JSON.parse(JSON.stringify(context.tvRemote)),tvControls=tv.rows.flatMap(row=>row.cells.filter(Boolean));
+assert.equal(tv.type,'simple');assert.equal(tvControls.length,17);assert.ok(tv.rows.every(row=>row.height===1&&row.columns===3));
+assert.deepEqual(tv.rows.map(row=>row.cells.map(node=>node?.name||null)),[[null,'Encender/apagar',null],['Volumen −','Silencio','Volumen +'],['Canal −','Fuente','Canal +'],['1','2','3'],['4','5','6'],['7','8','9'],[null,'0',null]]);
+const tvPower=tvControls.find(node=>node.type==='dual');
+assert.deepEqual(tvPower.actions.map(side=>[side.name,side.action]),[['Encender','learned'],['Apagar','learned']]);
+assert.ok(tvControls.filter(node=>node!==tvPower).every(node=>node.type==='button'&&node.action==='learned'));
+assert.deepEqual(tvControls.filter(node=>/^\d$/.test(node.name)).map(node=>[node.name,node.icon,node.showName]),['1','2','3','4','5','6','7','8','9','0'].map(name=>[name,'none',true]));
+assert.ok(!JSON.stringify([fresh,tv]).includes('signal_ref'));assert.ok(tvControls.every(node=>!node.entity&&!node.signals));
+const tvWire=exportModel({version:1,emitters:[{id:'tv-emitter',sourceId:'source',name:'IR salón',devices:[tv]}]}).emitters[0].devices[0];
+assert.equal(tvWire.functions.length,17);assert.equal(tvWire.functions.filter(fn=>fn.type==='button').length,16);
+const tvPowerFunction=tvWire.functions.find(fn=>fn.key===tvPower.id);
+assert.equal(tvPowerFunction.type,'switch');assert.deepEqual(tvPowerFunction.signal_refs,{});
+tvPowerFunction.signal_refs={on:'captured-tv-on',off:'captured-tv-off'};tvPowerFunction.signals={on:true,off:true};
+const restoredTV=importModel({version:1,emitters:[{id:'tv-emitter',sourceId:'source',name:'IR salón',devices:[tvWire]}]}).emitters[0].devices[0];
+assert.deepEqual(restoredTV.rows[0].cells[1].signal_refs,{on:'captured-tv-on',off:'captured-tv-off'});
+
+// The TV power editor exposes separate on/off learning channels, and pressing
+// its single tile sends those two actions alternately through the real handler.
+const learningTarget={innerHTML:''};
+const learningContext={d:tv,draft:tvPower,signalBusy:false,$:()=>learningTarget,$$:()=>[],esc:String,glyph:()=>'',independentStateEffect};
+vm.createContext(learningContext);
+vm.runInContext(source.split('\n').find(line=>line.trimStart().startsWith('const entityDomain ='))+'\n'+source.slice(source.indexOf('    const renderLearningFields=()=>'),source.indexOf('    const openEntityEditor='))+'\nrenderLearningFields();',learningContext);
+assert.match(learningTarget.innerHTML,/Encender · Acción 1/);assert.match(learningTarget.innerHTML,/Apagar · Acción 2/);
+assert.match(learningTarget.innerHTML,/data-signal="on"/);assert.match(learningTarget.innerHTML,/data-signal="off"/);assert.ok(!learningTarget.innerHTML.includes('data-signal="press"'));
+const powerCalls=[];
+const tvRuntime={d:restoredTV,b:restoredTV.rows[0].cells[1],independentSending:false,signalBusy:false,disposed:false,dualStateIndex:(d,b)=>b.activeSide===1?1:0,dualPowerLinked:()=>false,dualActions:b=>b.actions,queuePhysical:async action=>action(),api:{call:async(action,data)=>{powerCalls.push([action,data]);return {on:data.on};}},render(){},toast(){}};
+vm.createContext(tvRuntime);vm.runInContext(extract('executeAction'),tvRuntime);
+assert.equal(await vm.runInContext('executeAction(d,b)',tvRuntime),true);assert.equal(tvRuntime.b.activeSide,1);
+assert.equal(await vm.runInContext('executeAction(d,b)',tvRuntime),true);assert.equal(tvRuntime.b.activeSide,0);
+assert.deepEqual(powerCalls.map(([action,data])=>[action,data.function_key,data.on]),[['press',tvPower.id,true],['press',tvPower.id,false]]);
+
+// Exercise the actual creation dialog: icon selection determines the initial
+// template without another type selector. Later name/icon edits are cosmetic.
+let deviceDialog,creationSaves=0,creationCloses=0,creationRenders=0;
+const creationFields=new Map();
+const input=(value='')=>({value,textContent:'',listeners:{},addEventListener(name,callback){this.listeners[name]=callback;}});
+const creationEmitter={id:'creation-emitter',sourceId:'creation-source',name:'IR salón',devices:[]};
+const creationContext={uid:randomUUID,copy:structuredClone,independentStateEffect,model:{version:1,emitters:[creationEmitter]},view:'home',editing:true,esc:String,modalAbort:{signal:{}},$:selector=>creationFields.get(selector),showModal(title,body,buttons,setup){deviceDialog={title,body,buttons};setup?.();},persist(){creationSaves++;},closeModal(){creationCloses++;},render(){creationRenders++;},toast(){},formError(message){throw new Error(message);}};
+vm.createContext(creationContext);
+vm.runInContext(factoryOptions+'\n'+['selectOptions','field'].map(name=>source.split('\n').find(line=>line.trimStart().startsWith('const '+name+' ='))).join('\n')+'\n'+constructors+'\n'+extract('newDevice')+'\n'+extract('renameDevice'),creationContext);
+for(const [index,icon] of ['air-vent','wind','tv'].entries()){
+  creationFields.set('#new-device-name',input('Nuevo '+index));creationFields.set('#new-device-icon',input('air-vent'));creationFields.set('#template-description',input());
+  vm.runInContext('newDevice("creation-emitter")',creationContext);
+  assert.equal(deviceDialog.title,'Añadir dispositivo');assert.match(deviceDialog.body,/Nombre del dispositivo/);assert.match(deviceDialog.body,/>Icono</);assert.ok(!/new-device-kind|Mando con estados|Mando de botones|Tipo de mando/.test(deviceDialog.body));
+  const iconOptions=[...deviceDialog.body.matchAll(/<option value="([^"]+)"/g)].map(([,value])=>value);assert.deepEqual(iconOptions,['air-vent','wind','tv','remote','fan','light']);
+  assert.match(creationFields.get('#template-description').textContent,/Incluye pantalla/);
+  creationFields.get('#new-device-icon').value=icon;creationFields.get('#new-device-icon').listeners.change();
+  assert.match(creationFields.get('#template-description').textContent,icon==='tv'?/teclado numérico/:/Incluye pantalla/);
+  deviceDialog.buttons.find(button=>button.label==='Crear').run();
+  const created=creationEmitter.devices.at(-1);assert.equal(created.icon,icon);assert.equal(created.type,icon==='tv'?'simple':'stateful');assert.equal(creationContext.model.selected,created.id);assert.equal(creationContext.view,'remote');assert.equal(creationContext.editing,false);
+  const createdFunctions=exportModel(creationContext.model).emitters[0].devices.at(-1).functions;
+  assert.equal(createdFunctions.length,icon==='tv'?17:9);assert.equal(createdFunctions.filter(fn=>fn.state_effect?.swing).length,icon==='tv'?0:8);
+}
+assert.equal(creationSaves,3);assert.equal(creationCloses,3);assert.equal(creationRenders,3);
+const existingTV=creationEmitter.devices.at(-1),existingPower=existingTV.rows[0].cells[1];
+existingPower.entity='switch.tv_salon';existingPower.signal_refs={on:'existing-on',off:'existing-off'};existingPower.signals={on:true,off:true};existingPower.activeSide=1;
+const existingTVBefore=structuredClone(existingTV),wireBeforeRename=exportModel(creationContext.model);
+creationContext.d=existingTV;creationFields.set('#rename-device',input('TV renombrada'));creationFields.set('#rename-device-icon',input('air-vent'));
+vm.runInContext('renameDevice(d)',creationContext);assert.equal(deviceDialog.title,'Nombre e icono');deviceDialog.buttons.find(button=>button.label==='Guardar').run();
+const expectedTV={...existingTVBefore,name:'TV renombrada',icon:'air-vent'};assert.deepEqual(JSON.parse(JSON.stringify(existingTV)),expectedTV);
+const wireAfterRename=exportModel(creationContext.model),oldWireTV=wireBeforeRename.emitters[0].devices.at(-1),newWireTV=wireAfterRename.emitters[0].devices.at(-1);
+assert.deepEqual(newWireTV.functions,oldWireTV.functions);assert.deepEqual(newWireTV.layout,oldWireTV.layout);assert.deepEqual(newWireTV.studio.rows,oldWireTV.studio.rows);assert.equal(newWireTV.studio.type,'simple');
+console.log('AC/TV templates, creation dialog, preserved rename identities and real dual on/off learning and presses passed.');
 light.entity='button.ir_salon_aire_nuevo_luz';
+for(const [index,action] of swing.independentActions.entries())action.entity='button.ir_salon_aire_nuevo_oscilacion_'+index;
 const wire=exportModel({version:1,emitters:[{id:'new-emitter',sourceId:'source',name:'IR salón',model:'RM4 mini',devices:[fresh]}]});
-assert.equal(wire.emitters[0].devices[0].functions.length,1);assert.equal(wire.emitters[0].devices[0].functions[0].key,light.id);assert.equal(wire.emitters[0].devices[0].functions[0].type,'button');
+assert.equal(wire.emitters[0].devices[0].functions.length,9);assert.equal(wire.emitters[0].devices[0].functions.find(fn=>fn.key===light.id).type,'button');
 assert.ok(!source.includes('Mando con ajustes'));
 vm.runInContext(extract('displayAccent'),context);
 assert.equal(vm.runInContext("displayAccent('#b9c9b0')",context),'#f4f6f8');
@@ -91,13 +165,12 @@ assert.ok(!captureHTML.includes('Aprender este estado del mando original'));
 // Bulk deletion is a separate server operation. The confirmation does not edit
 // local rows, signals or entities, and only a canonical response replaces them.
 const bulkWire=structuredClone(wire),bulkDevice=bulkWire.emitters[0].devices[0];
-const savedId='saved-state',independentId='independent-option';
+const savedId='saved-state',independentId=bulkDevice.studio.rows[2].cells[1].independentActions.find(node=>node.value==='auto').id;
 const savedFunction={key:savedId,name:'Apagado',type:'button',entity:'button.split_apagado',icon:'power-off',color:'#ff8b80',showName:true,signals:{press:true},signal_refs:{press:'captured-state'},on:null};
 const independentFunction={key:independentId,name:'Oscilación',type:'button',entity:'button.split_oscilacion',icon:'swing',color:'#56c4ed',showName:true,signals:{press:true},signal_refs:{press:'captured-swing'},state_effect:{swing:'auto'},on:null};
-bulkDevice.functions.push(savedFunction,independentFunction);
+bulkDevice.functions.push(savedFunction);Object.assign(bulkDevice.functions.find(fn=>fn.key===independentId),independentFunction);
 bulkDevice.studio.savedStates=[{id:savedId,name:'Apagado',entity:savedFunction.entity,settings:{power:false},signal:{kind:'learned',id:'captured-state'}}];
-bulkDevice.studio.rows[2].cells[1].sendMode='independent';bulkDevice.studio.rows[2].cells[1].independentActions=[{id:independentId,name:'Oscilación',type:'button',action:'learned',value:'auto',state_effect:{swing:'auto'}}];
-for(const key of [savedId,independentId])bulkDevice.layout.rows.push({id:'layout-'+key,columns:1,height:2,cells:[key]});
+bulkDevice.layout.rows.push({id:'layout-'+savedId,columns:1,height:2,cells:[savedId]});
 const deletedWire=structuredClone(bulkWire);deletedWire.emitters[0].devices[0].studio.savedStates=[];deletedWire.emitters[0].devices[0].functions=deletedWire.emitters[0].devices[0].functions.filter(fn=>fn.key!==savedId);deletedWire.emitters[0].devices[0].layout.rows=deletedWire.emitters[0].devices[0].layout.rows.filter(row=>!row.cells.includes(savedId));
 let bulkDialog,bulkError='',bulkClosed=0,bulkRenders=0,bulkCalls=[],queuedRequest;
 const bulkContext={recordStateFields,isAdmin:true,saveFailed:false,signalBusy:false,independentSending:false,disposed:false,revision:10,catalog:[],confirmedWire:structuredClone(bulkWire),model:importModel(bulkWire,bulkDevice.id),viewedSavedStateId:savedId,importModel,copy:structuredClone,validateDevice:()=>true,esc:String,glyph:()=>'',configurationLabel:()=> 'Apagado',configurationKey:JSON.stringify,showModal(title,body,buttons){bulkDialog={title,body,buttons};},queueRequest:action=>new Promise((resolve,reject)=>{queuedRequest=async()=>{try{resolve(await action());}catch(error){reject(error);}};}),api:{call:async(action,data)=>{bulkCalls.push([action,data]);return {revision:12,model:deletedWire,catalog:[{id:'updated'}]};}},closeModal(){bulkClosed++;},render(){bulkRenders++;},toast(){},formError(message){bulkError=message;}};
@@ -206,6 +279,14 @@ assert.match(source,/symbol=buttonSymbol\(d,draft,visual\)/,'Editing preview use
 symbolContext.temperatureAvailable=()=>false;symbolContext.b={id:'temperature',type:'button',name:'Subir',action:'temp_up',icon:'plus',color:'#56c4ed',showName:true,sendMode:'independent'};symbolContext.editing=false;symbolContext.d.state.mode='fan';
 assert.ok(!vm.runInContext('buttonHTML(d,b,r,0)',symbolContext).includes(' disabled'));
 symbolContext.b.sendMode='settings';assert.ok(vm.runInContext('buttonHTML(d,b,r,0)',symbolContext).includes(' disabled'));
+
+// Number controls use their visible digit in compact rows without reserving an
+// icon slot. Their line height keeps the glyph metrics inside the tile.
+symbolContext.d=tv;symbolContext.b=tv.rows.at(-1).cells[1];symbolContext.r=tv.rows.at(-1);
+const digitHTML=vm.runInContext('buttonHTML(d,b,r,0)',symbolContext);
+assert.match(digitHTML,/class="remote-button is-number"/);assert.match(digitHTML,/aria-label="0"/);assert.match(digitHTML,/class="button-label">0<\/span>/);assert.ok(!digitHTML.includes('class="button-symbol"'));
+assert.match(styles,/\.layout-row\[data-height="1"\] \.remote-button\.is-number \.button-label\{font-size:24px;line-height:1\.2;/);
+for(const icon of ['tv-input','volume-off'])assert.notEqual(renderIcon(icon),renderIcon('remote'));
 
 // Position IDs and labels remain stable; only their pictograms reverse. One is
 // vertical/down and six is horizontal/up, with one active ray per fixed position.

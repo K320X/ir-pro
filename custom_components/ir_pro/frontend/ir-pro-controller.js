@@ -1,7 +1,7 @@
-import {icon} from './ir-pro-icons.js?v=0.2.0b8';
-import {importModel,exportModel,reconcileCanonical,independentStateEffect,linkedActionEffect,actionStateField,controlledStateFields,recordStateFields,projectState,scopedStateKey,stateRecordMatches,findSavedState} from './ir-pro-model.js?v=0.2.0b8';
-import {mountIconPickers} from './ir-pro-pickers.js?v=0.2.0b8';
-import {createModalScrollLock} from './ir-pro-modal-scroll.js?v=0.2.0b8';
+import {icon} from './ir-pro-icons.js?v=1.0.0';
+import {importModel,exportModel,reconcileCanonical,independentStateEffect,linkedActionEffect,actionStateField,controlledStateFields,recordStateFields,projectState,scopedStateKey,stateRecordMatches,findSavedState} from './ir-pro-model.js?v=1.0.0';
+import {mountIconPickers} from './ir-pro-pickers.js?v=1.0.0';
+import {createModalScrollLock} from './ir-pro-modal-scroll.js?v=1.0.0';
 export function mountStudio(root,api,initial,isAdmin,openMenu) {
   const scope=root.getRootNode(),lifecycle=new AbortController();
   let disposed=false,catalog=initial.catalog||[],revision=initial.revision||0,saveQueue=Promise.resolve(true),saveFailed=false,actionError='',signalBusy=false,independentSending=false,operation=0,pendingSaves=0,unsubscribe=null,lastAmbientSnapshot='',deferredEnvelope=null,scrollGeneration=0,inputGeneration=0,lastRenderedRoute='';
@@ -33,9 +33,9 @@ export function mountStudio(root,api,initial,isAdmin,openMenu) {
   const swingDescription = state => 'Oscilación '+(swingValue(state)==='auto'?'automática':swingValue(state)==='off'?'desactivada':'posición '+swingValue(state).split('_')[1]);
   const swingChoices = folder => swingStates.filter(option=>option.value==='auto'?folder.swingAuto!==false:option.value==='off'?folder.swingOff!==false:Number(option.value.split('_')[1])<=clamp(folder.swingPositionCount,1,6,6));
   const symbols = [{value:'remote',name:'Mando'},{value:'power',name:'Encender'},{value:'power-off',name:'Apagar'},{value:'plus',name:'Más'},{value:'minus',name:'Menos'},{value:'snowflake',name:'Frío'},{value:'sun',name:'Calor'},{value:'droplet',name:'Deshumidificación'},{value:'fan',name:'Ventilador'},{value:'swing',name:'Oscilación'},{value:'wind',name:'Viento'},{value:'thermometer',name:'Temperatura'},{value:'folder',name:'Carpeta'},{value:'settings',name:'Ajustes'},{value:'moon',name:'Noche'},{value:'light',name:'Luz'},{value:'none',name:'Sin icono'}];
-  const deviceIcons = [{value:'remote',name:'Mando'},{value:'wind',name:'Aire acondicionado'},{value:'tv',name:'Televisor'},{value:'fan',name:'Ventilador'},{value:'light',name:'Iluminación'}];
+  const deviceIcons = [{value:'air-vent',name:'Aire acondicionado (split)'},{value:'wind',name:'Aire acondicionado'},{value:'tv',name:'Televisor'},{value:'remote',name:'Mando'},{value:'fan',name:'Ventilador'},{value:'light',name:'Iluminación'}];
   symbols.push(...[{value:'chevron-up',name:'Flecha arriba'},{value:'chevron-down',name:'Flecha abajo'},{value:'timer',name:'Temporizador'},{value:'timer-off',name:'Cancelar temporizador'},{value:'volume-2',name:'Volumen'},{value:'move-vertical',name:'Movimiento vertical'},{value:'move-horizontal',name:'Movimiento horizontal'},{value:'droplets',name:'Humedad'},{value:'lightbulb',name:'Bombilla'},{value:'zap',name:'Potencia'},{value:'leaf',name:'Ahorro'}]);
-  deviceIcons.push({value:'air-vent',name:'Aire acondicionado'});
+  symbols.push({value:'tv-input',name:'Fuente de televisión'},{value:'volume-off',name:'Silencio'});
   const actionOptions = [{value:'learned',name:'Enviar una señal aprendida'},{value:'power_on',name:'Encender'},{value:'power_off',name:'Apagar'},{value:'temp_up',name:'Subir temperatura'},{value:'temp_down',name:'Bajar temperatura'},{value:'set_mode',name:'Seleccionar un modo'},{value:'set_fan',name:'Seleccionar una velocidad'},{value:'set_swing',name:'Seleccionar posición u oscilación'},{value:'swing',name:'Activar o desactivar oscilación'}];
   const actionValueChoices = action => action==='set_mode'?modes:action==='set_fan'?fans:action==='set_swing'?swingStates:null;
   const actionValueLabel = action => action==='set_mode'?'Modo':action==='set_fan'?'Velocidad':'Posición u oscilación';
@@ -125,21 +125,52 @@ export function mountStudio(root,api,initial,isAdmin,openMenu) {
     if(dualPowerLinked(d,b))return dualActions(b,d).findIndex(side=>side.action===(d.state.power?'power_off':'power_on'));
     return b.activeSide===1?1:0;
   }
-  const newRemote = (name, symbol, type) => {
-    const d = {id:uid(),name,icon:symbol,type,state:{power:false,mode:'cool',temperature:24,fan:'auto',swing:'off'},rows:[]};
-    if (type === 'stateful') d.rows = [
-      displayRow(),
-      row([{...group('Modo','snowflake','mode'),color:'#f6cf79'},{...button('Encendido del aire','power','power_on','#6cd9a2'),type:'dual',activeSide:0,actions:[{name:'Apagado',icon:'power-off',color:'#ff8b80',showName:true,action:'power_on',value:''},{name:'Encendido',icon:'power',color:'#6cd9a2',showName:true,action:'power_off',value:''}]},{...group('Ventilador','fan','fan'),fanSpeedCount:5,fanAuto:true}]),
-      row([button('Bajar','minus','temp_down','#6cd9ce'),{...group('Oscilación','swing','swing'),color:'#c6b5ff'},button('Subir','plus','temp_up','#6cd9ce')]),
-      row([null,button('Luz','light','learned','#f6cf79'),null],3)
-    ];
-    else {
-      const folder=group('Opciones','folder','custom');
-      folder.children=[button('Encender','power','learned','#6cd9a2'),button('Apagar','power-off','learned','#ff8b80')];
-      d.rows=[row([button('Encender','power','learned','#6cd9a2'),button('Apagar','power-off','learned','#ff8b80'),folder])];
+  const newRemote = (name, symbol) => {
+    const climate = ['air-vent','wind'].includes(symbol);
+    const d = {id:uid(),name,icon:symbol,type:climate?'stateful':'simple',state:{power:false,mode:'cool',temperature:24,fan:'auto',swing:'off'},rows:[]};
+    const compactRow = (cells, columns = cells.length || 1) => ({...row(cells,columns),height:1});
+    if (climate) {
+      d.rows = [
+        {...displayRow(),height:2,width:3,style:'modern',accent:'#ffffff',fields:{temperature:true,mode:true,fan:true,swing:true,power:true}},
+        compactRow([
+          {...group('Modo','snowflake','mode'),color:'#f2b636',sendMode:'settings'},
+          {...button('Encendido/apagado','power','power_on','#6cd9a2'),type:'dual',sendMode:'settings',activeSide:0,actions:[
+            {name:'Apagado',icon:'power-off',color:'#ff8b80',showName:true,action:'power_on',value:''},
+            {name:'Encendido',icon:'power',color:'#6cd9a2',showName:true,action:'power_off',value:''}
+          ]},
+          {...group('Ventilador','fan','fan'),color:'#56c4ed',sendMode:'settings',fanSpeedCount:5,fanAuto:true}
+        ]),
+        compactRow([
+          {...button('Bajar','minus','temp_down','#53eeb3'),sendMode:'settings'},
+          {...group('Oscilación','swing','swing'),color:'#c6b5ff',sendMode:'independent',swingPositionCount:6,swingAuto:true,swingOff:true},
+          {...button('Subir','plus','temp_up','#53eeb3'),sendMode:'settings'}
+        ]),
+        compactRow([button('Luz','light','learned','#fff8ad')],1)
+      ];
+    } else if (symbol === 'tv') {
+      const power = {...button('Encender/apagar','power','learned','#6cd9a2'),type:'dual',activeSide:0,actions:[
+        {name:'Encender',icon:'power',color:'#6cd9a2',showName:true,action:'learned',value:''},
+        {name:'Apagar',icon:'power-off',color:'#ff8b80',showName:true,action:'learned',value:''}
+      ]};
+      const digit = value => button(String(value),'none','learned','#56c4ed');
+      d.rows = [
+        compactRow([null,power,null],3),
+        compactRow([button('Volumen −','minus','learned','#53eeb3'),button('Silencio','volume-off','learned','#f2b636'),button('Volumen +','plus','learned','#53eeb3')]),
+        compactRow([button('Canal −','chevron-down','learned','#56c4ed'),button('Fuente','tv-input','learned','#c6b5ff'),button('Canal +','chevron-up','learned','#56c4ed')]),
+        compactRow([digit(1),digit(2),digit(3)]),
+        compactRow([digit(4),digit(5),digit(6)]),
+        compactRow([digit(7),digit(8),digit(9)]),
+        compactRow([null,digit(0),null],3)
+      ];
+    } else {
+      const folder = group('Opciones','folder','custom');
+      folder.children = [button('Encender','power','learned','#6cd9a2'),button('Apagar','power-off','learned','#ff8b80')];
+      d.rows = [compactRow([button('Encender','power','learned','#6cd9a2'),button('Apagar','power-off','learned','#ff8b80'),folder])];
     }
+    for(const layoutRow of d.rows)for(const control of layoutRow.cells||[])if(control)ensureIndependentActions(control);
     return d;
   };
+
   function validateDevice(d) {
     if (!d || typeof d !== 'object' || typeof d.id !== 'string' || typeof d.name !== 'string' || !Array.isArray(d.rows)) return false;
     if (!['simple','stateful'].includes(d.type)) return false;
@@ -392,7 +423,7 @@ export function mountStudio(root,api,initial,isAdmin,openMenu) {
     const pressed=dualPowerLinked(d,b)?d.state.power:dualStateIndex(d,b)===1;
     const visibleText=visual.name;
     const label=dual?b.name+': '+(visibleText||visual.name||actionOptions.find(action=>action.value===visual.action)?.name||'Acción'):b.name;
-    return '<button type="button" class="remote-button'+(b.type==='group'?' is-group':'')+(dual?' is-dual':'')+(dual&&pressed?' is-on':'')+'" style="--button-color:'+esc(visual.color)+(editing?';touch-action:none;user-select:none':'')+'" data-button="'+esc(b.id)+'" data-drop-row="'+esc(r.id)+'" data-drop-index="'+index+'"'+(editing?' draggable="true"':'')+(dual?' aria-pressed="'+pressed+'"':'')+(unavailable&&!editing?' disabled title="Este modo no permite ajustar la temperatura"':'')+' aria-label="'+esc(label)+'"'+(stateTitle?' title="'+esc(stateTitle)+'"':'')+'>'+
+    return '<button type="button" class="remote-button'+(visual.icon==='none'&&/^\d$/.test(visibleText)?' is-number':'')+(b.type==='group'?' is-group':'')+(dual?' is-dual':'')+(dual&&pressed?' is-on':'')+'" style="--button-color:'+esc(visual.color)+(editing?';touch-action:none;user-select:none':'')+'" data-button="'+esc(b.id)+'" data-drop-row="'+esc(r.id)+'" data-drop-index="'+index+'"'+(editing?' draggable="true"':'')+(dual?' aria-pressed="'+pressed+'"':'')+(unavailable&&!editing?' disabled title="Este modo no permite ajustar la temperatura"':'')+' aria-label="'+esc(label)+'"'+(stateTitle?' title="'+esc(stateTitle)+'"':'')+'>'+
       (editing?'<span class="button-top">'+(b.type==='group'?'Editar carpeta':'Editar función')+'</span>':'')+
       (symbol!=='none'?'<span class="button-symbol">'+glyph(symbol)+'</span>':'')+
       (visual.showName?'<span class="button-label">'+esc(visibleText)+'</span>':'')+
@@ -417,7 +448,7 @@ export function mountStudio(root,api,initial,isAdmin,openMenu) {
       (editing?'<div class="row-add-actions"><button class="btn" data-add-row>'+glyph('add-row')+'Añadir fila</button><button class="btn" data-add-element>'+glyph('plus')+'Añadir función</button></div>':'')+'</div>'+(d.type==='stateful'?stateCapturePanel(d):'');
   }
   function renderHome() {
-    app.innerHTML='<div class="page-head"><div class="identity"><div><h1>Emisores</h1><p class="muted">Tus mandos infrarrojos</p></div></div><button class="btn primary" data-add-emitter>'+glyph('plus')+'Añadir emisor</button></div><div class="stack">'+model.emitters.map(e=>'<section class="emitter-card"><div class="emitter-header"><div class="emitter-title">'+glyph('radio')+'<div><h2>'+esc(e.name)+'</h2><span class="muted small">'+esc(e.model)+'</span></div></div><div class="device-actions"><button class="btn text" data-add-device="'+esc(e.id)+'">'+glyph('plus')+'Añadir dispositivo</button><button class="icon-btn" data-emitter-menu="'+esc(e.id)+'" aria-label="Opciones de '+esc(e.name)+'">'+glyph('more')+'</button></div></div><div class="device-list">'+(e.devices.length?e.devices.map(d=>'<div class="device-item"><button class="device-open" data-open="'+esc(d.id)+'"><span class="device-icon">'+glyph(d.icon)+'</span><span class="device-info"><strong>'+esc(d.name)+'</strong><span class="muted small">'+(d.type==='stateful'?'Mando con estados':'Mando de botones')+'</span></span></button><button class="icon-btn" data-device-menu="'+esc(d.id)+'" aria-label="Opciones de '+esc(d.name)+'">'+glyph('more')+'</button></div>').join(''):'<p class="muted">Añade tu primer dispositivo.</p>')+'</div></section>').join('')+'</div>';
+    app.innerHTML='<div class="page-head"><div class="identity"><div><h1>Emisores</h1><p class="muted">Tus mandos infrarrojos</p></div></div><button class="btn primary" data-add-emitter>'+glyph('plus')+'Añadir emisor</button></div><div class="stack">'+model.emitters.map(e=>'<section class="emitter-card"><div class="emitter-header"><div class="emitter-title">'+glyph('radio')+'<div><h2>'+esc(e.name)+'</h2><span class="muted small">'+esc(e.model)+'</span></div></div><div class="device-actions"><button class="btn text" data-add-device="'+esc(e.id)+'">'+glyph('plus')+'Añadir dispositivo</button><button class="icon-btn" data-emitter-menu="'+esc(e.id)+'" aria-label="Opciones de '+esc(e.name)+'">'+glyph('more')+'</button></div></div><div class="device-list">'+(e.devices.length?e.devices.map(d=>'<div class="device-item"><button class="device-open" data-open="'+esc(d.id)+'"><span class="device-icon">'+glyph(d.icon)+'</span><span class="device-info"><strong>'+esc(d.name)+'</strong><span class="muted small">Mando</span></span></button><button class="icon-btn" data-device-menu="'+esc(d.id)+'" aria-label="Opciones de '+esc(d.name)+'">'+glyph('more')+'</button></div>').join(''):'<p class="muted">Añade tu primer dispositivo.</p>')+'</div></section>').join('')+'</div>';
   }
   function render() {
     if(view!=='home'&&!selected())view='home';
@@ -663,12 +694,13 @@ export function mountStudio(root,api,initial,isAdmin,openMenu) {
   }
   function newDevice(emitterId) {
     const e=model.emitters.find(v=>v.id===emitterId);if(!e)return;
-    let kind='stateful';
-    showModal('Añadir dispositivo',field('Nombre del dispositivo','<input id="new-device-name" maxlength="70" placeholder="Por ejemplo, Split dormitorio">')+field('Icono','<select id="new-device-icon">'+selectOptions(deviceIcons,'wind')+'</select>')+'<div class="field"><span>Tipo de mando</span><div class="choice-grid"><button class="choice selected" data-kind="stateful">'+glyph('display')+'<strong>Mando con estados</strong><span class="muted small">Recuerda temperatura, modo y ventilación.</span></button><button class="choice" data-kind="simple">'+glyph('remote')+'<strong>Mando de botones</strong><span class="muted small">Cada botón reproduce una señal aprendida.</span></button></div></div><p class="small muted">'+esc(e.name)+'</p><p id="form-error" class="warning" hidden></p>',[{label:'Cancelar'},{label:'Crear',className:'primary',run:()=>{
+    const hint=()=>{const value=$('#new-device-icon').value;$('#template-description').textContent=['air-vent','wind'].includes(value)?'Incluye pantalla, modos, temperatura, ventilador, oscilación y luz. Podrás editar todos los controles.':value==='tv'?'Incluye encendido y apagado, volumen, canales, fuente y teclado numérico. Podrás editar todos los controles.':'Incluye controles editables para aprender las señales de tu mando.';};
+    showModal('Añadir dispositivo',field('Nombre del dispositivo','<input id="new-device-name" maxlength="70" placeholder="Por ejemplo, Televisor salón">')+field('Icono','<select id="new-device-icon">'+selectOptions(deviceIcons,'air-vent')+'</select>')+'<p id="template-description" class="small muted"></p><p class="small muted">'+esc(e.name)+'</p><p id="form-error" class="warning" hidden></p>',[{label:'Cancelar'},{label:'Crear',className:'primary',run:()=>{
       const name=$('#new-device-name').value.trim();if(!name){formError('Escribe un nombre para el dispositivo.');return;}
-      const d=newRemote(name,$('#new-device-icon').value,kind);e.devices.push(d);model.selected=d.id;view='remote';editing=false;persist();closeModal();render();toast('Dispositivo creado en IR Pro.');
-    }}],()=>{$$('[data-kind]',modalBody).forEach(b=>b.addEventListener('click',()=>{kind=b.dataset.kind;$$('[data-kind]',modalBody).forEach(c=>c.classList.toggle('selected',c===b));},{signal:modalAbort.signal}));});
+      const d=newRemote(name,$('#new-device-icon').value);e.devices.push(d);model.selected=d.id;view='remote';editing=false;persist();closeModal();render();toast('Dispositivo creado en IR Pro.');
+    }}],()=>{hint();$('#new-device-icon').addEventListener('change',hint,{signal:modalAbort.signal});});
   }
+
   function formError(message) {const element=$('#form-error');if(element){element.textContent=message;element.hidden=false;}}
   function renameDevice(d) {
     showModal('Nombre e icono',field('Nombre del dispositivo','<input id="rename-device" maxlength="70" value="'+esc(d.name)+'">')+field('Icono','<select id="rename-device-icon">'+selectOptions(deviceIcons,d.icon)+'</select>')+'<p id="form-error" class="warning" hidden></p>',[{label:'Cancelar'},{label:'Guardar',className:'primary',run:()=>{const name=$('#rename-device').value.trim();if(!name){formError('Escribe un nombre.');return;}d.name=name;d.icon=$('#rename-device-icon').value;persist();closeModal();render();toast('Nombre e icono actualizados.');}}]);

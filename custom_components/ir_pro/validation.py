@@ -12,6 +12,7 @@ ICONS = {
     "droplets", "power", "snowflake", "fan", "volume-2", "sun", "lightbulb",
     "chevron-up", "chevron-down", "move-vertical", "move-horizontal", "settings",
     "timer", "timer-off", "thermometer", "wind", "zap", "leaf", "moon", "none",
+    "tv-input", "volume-off",
 }
 ICONS |= STUDIO_ICONS
 DEVICE_ICONS = {"air-vent", "tv", "fan", "remote", "wind", "light"}

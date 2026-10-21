@@ -17,6 +17,8 @@ function irConceptFanSpeedIcon(total,level){
   }).join('');
 }
 const irConceptIconPaths={
+'tv-input':'<rect x="3" y="4" width="18" height="15" rx="2"/><path d="M3 12h11m-4-4 4 4-4 4M8 22h8"/>',
+'volume-off':'<path d="M4 9h4l5-4v14l-5-4H4Z M17 9l5 6m0-6-5 6"/>',
 power:'<path d="M12 2v10M6 5.5a9 9 0 1 0 12 0"/>',
 'power-off':'<circle cx="12" cy="12" r="9"/><path d="M8 12h8"/>',
 plus:'<path d="M12 5v14M5 12h14"/>',minus:'<path d="M5 12h14"/>',
