@@ -7,30 +7,35 @@ from homeassistant.components import websocket_api
 
 from .const import DOMAIN
 from .errors import IRProError
+from .localization import localize_message, localize_result
 
 _LOGGER = logging.getLogger(__name__)
 
 
 async def _run(hass, connection, msg, operation, *, admin=True) -> None:
+    # The panel sends its user's HA language. Older clients and unsupported
+    # languages use English, as with the native integration translations.
+    # Never store a user's locale in the model or in shared manager state.
+    language = msg.get("language", "en")
     if not connection.user or (admin and not connection.user.is_admin):
-        connection.send_error(msg["id"], "permission_denied", "Solo los administradores pueden realizar esta operación.")
+        connection.send_error(msg["id"], "permission_denied", localize_message("Solo los administradores pueden realizar esta operación.", language))
         return
     manager = hass.data.get(DOMAIN, {}).get("manager")
     if manager is None:
-        connection.send_error(msg["id"], "not_loaded", "IR Pro no está cargado.")
+        connection.send_error(msg["id"], "not_loaded", localize_message("IR Pro no está cargado.", language))
         return
     try:
         result = await operation(manager)
     except IRProError as err:
-        connection.send_error(msg["id"], err.code, err.message)
+        connection.send_error(msg["id"], err.code, err.localized_message(language))
     except Exception:
         _LOGGER.exception("Unexpected IR Pro WebSocket error")
-        connection.send_error(msg["id"], "unknown_error", "No se ha podido completar la operación.")
+        connection.send_error(msg["id"], "unknown_error", localize_message("No se ha podido completar la operación.", language))
     else:
-        connection.send_result(msg["id"], result)
+        connection.send_result(msg["id"], localize_result(result, language))
 
 
-@websocket_api.websocket_command({"type": "ir_pro/get"})
+@websocket_api.websocket_command({"type": "ir_pro/get", probatio.Optional("language"): str})
 @websocket_api.async_response
 async def ws_get(hass, connection, msg):
     async def get(manager):
@@ -38,7 +43,7 @@ async def ws_get(hass, connection, msg):
     await _run(hass, connection, msg, get, admin=False)
 
 
-@websocket_api.websocket_command({"type": "ir_pro/subscribe"})
+@websocket_api.websocket_command({"type": "ir_pro/subscribe", probatio.Optional("language"): str})
 @websocket_api.async_response
 async def ws_subscribe(hass, connection, msg):
     async def subscribe(manager):
@@ -50,7 +55,7 @@ async def ws_subscribe(hass, connection, msg):
 
 
 @websocket_api.websocket_command({
-    "type": "ir_pro/save", probatio.Required("model"): dict,
+    "type": "ir_pro/save", probatio.Optional("language"): str, probatio.Required("model"): dict,
     probatio.Required("expected_revision"): int,
     probatio.Optional("entity_renames"): dict,
 })
@@ -60,7 +65,7 @@ async def ws_save(hass, connection, msg):
 
 
 @websocket_api.websocket_command({
-    "type": "ir_pro/learn", probatio.Required("source_id"): str,
+    "type": "ir_pro/learn", probatio.Optional("language"): str, probatio.Required("source_id"): str,
     probatio.Required("device_id"): str, probatio.Required("function_key"): str,
     probatio.Required("signal"): probatio.In(["press", "on", "off"]),
 })
@@ -70,7 +75,7 @@ async def ws_learn(hass, connection, msg):
 
 
 @websocket_api.websocket_command({
-    "type": "ir_pro/test_signal", probatio.Required("signal_ref"): str,
+    "type": "ir_pro/test_signal", probatio.Optional("language"): str, probatio.Required("signal_ref"): str,
 })
 @websocket_api.async_response
 async def ws_test_signal(hass, connection, msg):
@@ -78,7 +83,7 @@ async def ws_test_signal(hass, connection, msg):
 
 
 @websocket_api.websocket_command({
-    "type": "ir_pro/confirm_signal", probatio.Required("signal_ref"): str,
+    "type": "ir_pro/confirm_signal", probatio.Optional("language"): str, probatio.Required("signal_ref"): str,
 })
 @websocket_api.async_response
 async def ws_confirm_signal(hass, connection, msg):
@@ -86,7 +91,7 @@ async def ws_confirm_signal(hass, connection, msg):
 
 
 @websocket_api.websocket_command({
-    "type": "ir_pro/press", probatio.Required("function_key"): str,
+    "type": "ir_pro/press", probatio.Optional("language"): str, probatio.Required("function_key"): str,
     probatio.Optional("on"): bool,
 })
 @websocket_api.async_response
@@ -95,7 +100,7 @@ async def ws_press(hass, connection, msg):
 
 
 @websocket_api.websocket_command({
-    "type": "ir_pro/send_state", probatio.Required("device_id"): str,
+    "type": "ir_pro/send_state", probatio.Optional("language"): str, probatio.Required("device_id"): str,
     probatio.Required("state"): dict,
     probatio.Optional("controlled_fields"): list,
 })
@@ -105,7 +110,7 @@ async def ws_send_state(hass, connection, msg):
 
 
 @websocket_api.websocket_command({
-    "type": "ir_pro/delete_saved_states", probatio.Required("device_id"): str,
+    "type": "ir_pro/delete_saved_states", probatio.Optional("language"): str, probatio.Required("device_id"): str,
     probatio.Required("expected_revision"): int,
 })
 @websocket_api.async_response

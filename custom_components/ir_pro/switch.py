@@ -4,6 +4,7 @@ from homeassistant.components.switch import SwitchEntity
 from homeassistant.exceptions import HomeAssistantError
 
 from .entity import IRProEntity
+from .const import DOMAIN
 from .errors import IRProError
 
 
@@ -25,7 +26,9 @@ class IRProSwitch(IRProEntity, SwitchEntity):
         try:
             await self.manager.async_press(self.key, desired=on)
         except IRProError as err:
-            raise HomeAssistantError(err.message) from err
+            raise HomeAssistantError(
+                translation_domain=DOMAIN, translation_key=err.translation_key,
+            ) from err
 
     async def async_turn_on(self, **kwargs) -> None:
         await self._send(True)

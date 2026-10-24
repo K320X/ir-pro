@@ -10,5 +10,427 @@
     "abort": {
       "already_configured": "IR Pro ya está configurado."
     }
+  },
+  "exceptions": {
+    "operation_failed": {
+      "message": "No se ha podido completar la operación."
+    },
+    "permission_denied": {
+      "message": "Solo los administradores pueden realizar esta operación."
+    },
+    "not_loaded": {
+      "message": "IR Pro no está cargado."
+    },
+    "single_installation": {
+      "message": "Solo se permite una instalación de IR Pro."
+    },
+    "learned_action_index": {
+      "message": "Cada acción aprendida debe corresponder a una acción distinta del botón doble."
+    },
+    "function_placement": {
+      "message": "Cada función debe aparecer exactamente una vez en el mando."
+    },
+    "mixed_dual_actions": {
+      "message": "Cada lado aprendido del botón mixto necesita su propia acción; dos lados aprendidos usan una entidad switch."
+    },
+    "independent_setting": {
+      "message": "El ajuste de la acción independiente no es válido."
+    },
+    "dual_action_count": {
+      "message": "El botón de doble acción necesita dos acciones."
+    },
+    "folder_content": {
+      "message": "El contenido de la carpeta no es válido."
+    },
+    "device_changed_learning": {
+      "message": "El dispositivo ha cambiado durante el aprendizaje."
+    },
+    "signal_source": {
+      "message": "El dispositivo y la señal no corresponden al emisor."
+    },
+    "device_missing": {
+      "message": "El dispositivo ya no existe."
+    },
+    "editor_limit": {
+      "message": "El editor contiene demasiadas funciones o niveles."
+    },
+    "signal_effect_retained": {
+      "message": "El efecto de una señal existente se conserva. Crea otra función para cambiarlo."
+    },
+    "editor_effect_mismatch": {
+      "message": "El efecto del editor no corresponde a su función real."
+    },
+    "source_offline": {
+      "message": "El emisor está desconectado o desactivado."
+    },
+    "source_busy": {
+      "message": "El emisor está ocupado. Espera a que termine la operación."
+    },
+    "source_unavailable": {
+      "message": "El emisor no está disponible en Home Assistant."
+    },
+    "source_timeout": {
+      "message": "El emisor no ha respondido a tiempo. Espera unos segundos y vuelve a intentarlo."
+    },
+    "source_missing": {
+      "message": "El emisor ya no está disponible en Home Assistant."
+    },
+    "off_state_fields": {
+      "message": "El estado de apagado solo incluye el encendido."
+    },
+    "dual_state_invalid": {
+      "message": "El estado del botón de doble acción no es válido."
+    },
+    "remote_state_invalid": {
+      "message": "El estado del mando no es válido."
+    },
+    "saved_state_changed": {
+      "message": "El estado guardado ha cambiado. Recarga el mando antes de enviarlo."
+    },
+    "saved_state_entity": {
+      "message": "El estado guardado no corresponde a una entidad button de este mando."
+    },
+    "device_icon": {
+      "message": "El icono del dispositivo no es válido."
+    },
+    "function_style": {
+      "message": "El icono o el color de la función no es válido."
+    },
+    "editor_style": {
+      "message": "El icono o el color del editor no son válidos."
+    },
+    "editor_id": {
+      "message": "El identificador del editor no es válido."
+    },
+    "remote_mode_speed": {
+      "message": "El modo o la velocidad del mando no son válidos."
+    },
+    "entity_identifier": {
+      "message": "El nombre de entidad debe conservar button. o switch. y usar un identificador válido."
+    },
+    "cell_count": {
+      "message": "El número de casillas no coincide con las columnas."
+    },
+    "send_mode": {
+      "message": "El tipo de envío de la función no es válido."
+    },
+    "editor_row_type": {
+      "message": "El tipo de fila del editor no es válido."
+    },
+    "editor_function_type": {
+      "message": "El tipo de función del editor no es válido."
+    },
+    "editor_remote_type": {
+      "message": "El tipo de mando del editor no es válido."
+    },
+    "editor_action_value": {
+      "message": "El valor de la acción del editor no es válido."
+    },
+    "stateful_remote_required": {
+      "message": "Este dispositivo no es un mando con estados."
+    },
+    "learning_unsupported": {
+      "message": "Este emisor no permite aprender señales."
+    },
+    "source_duplicate": {
+      "message": "Este emisor ya está añadido."
+    },
+    "state_not_learned": {
+      "message": "Este estado no tiene una señal aprendida. Aprende primero este estado del mando original."
+    },
+    "duplicate_entities": {
+      "message": "Hay entidades repetidas."
+    },
+    "duplicate_internal_ids": {
+      "message": "Hay identificadores internos repetidos."
+    },
+    "duplicate_independent_options": {
+      "message": "Hay opciones independientes repetidas en esta carpeta."
+    },
+    "invalid_device": {
+      "message": "Hay un dispositivo no válido."
+    },
+    "invalid_source": {
+      "message": "Hay un emisor no válido."
+    },
+    "invalid_saved_state": {
+      "message": "Hay un estado guardado no válido."
+    },
+    "invalid_internal_id": {
+      "message": "Hay un identificador interno no válido."
+    },
+    "invalid_editor_row": {
+      "message": "Hay una fila del editor no válida."
+    },
+    "invalid_row": {
+      "message": "Hay una fila no válida."
+    },
+    "invalid_columns_or_row": {
+      "message": "Hay una fila repetida o un número de columnas no válido."
+    },
+    "invalid_function": {
+      "message": "Hay una función no válida."
+    },
+    "invalid_stored_signal": {
+      "message": "Hay una referencia de señal guardada no válida."
+    },
+    "ambiguous_state": {
+      "message": "Hay varias capturas para estos ajustes. Conserva una sola antes de enviar el estado."
+    },
+    "reloading": {
+      "message": "IR Pro se está recargando."
+    },
+    "learned_action_effect": {
+      "message": "La acción aprendida debe ser un botón sin cambios de ajustes."
+    },
+    "editor_action": {
+      "message": "La acción del editor no es válida."
+    },
+    "independent_one_setting": {
+      "message": "La acción independiente debe cambiar un único ajuste."
+    },
+    "row_height": {
+      "message": "La altura de la fila no es válida."
+    },
+    "capture_fields_changed": {
+      "message": "La captura debe incluir únicamente los ajustes combinados actuales del mando. Recarga el panel antes de grabar el estado."
+    },
+    "folder_limit": {
+      "message": "La carpeta contiene demasiadas funciones."
+    },
+    "collection_limit": {
+      "message": "La colección no es válida o supera el tamaño permitido."
+    },
+    "editor_element_limit": {
+      "message": "La configuración del editor contiene demasiados elementos."
+    },
+    "editor_json": {
+      "message": "La configuración del editor no contiene JSON válido."
+    },
+    "editor_size": {
+      "message": "La configuración del editor supera el tamaño permitido."
+    },
+    "editor_depth": {
+      "message": "La configuración del editor tiene demasiados niveles."
+    },
+    "stored_configuration": {
+      "message": "La configuración guardada de IR Pro no es válida."
+    },
+    "revision_conflict": {
+      "message": "La configuración ha cambiado en otra ventana. Recarga antes de guardar."
+    },
+    "invalid_configuration": {
+      "message": "La configuración no es válida."
+    },
+    "row_layout": {
+      "message": "La distribución de filas no es válida."
+    },
+    "editor_layout": {
+      "message": "La distribución del editor no es válida."
+    },
+    "entity_domain": {
+      "message": "La entidad debe usar button. o switch. y un nombre válido."
+    },
+    "entity_occupied": {
+      "message": "La entidad elegida ya está en uso. Escribe otro identificador."
+    },
+    "entity_ownership": {
+      "message": "La entidad no pertenece a esta integración de IR Pro."
+    },
+    "function_identity_retained": {
+      "message": "La entidad y el tipo de una función existente se conservan."
+    },
+    "editor_function": {
+      "message": "La función del editor no es válida."
+    },
+    "function_unavailable": {
+      "message": "La función no está disponible o necesita aprender sus señales."
+    },
+    "new_function_identifier": {
+      "message": "La función nueva necesita un identificador válido."
+    },
+    "function_missing": {
+      "message": "La función ya no está disponible."
+    },
+    "action_identity_retained": {
+      "message": "La identidad de una acción existente se conserva."
+    },
+    "independent_effect_mismatch": {
+      "message": "La opción independiente no coincide con el ajuste de su señal."
+    },
+    "remote_display": {
+      "message": "La pantalla del mando no es válida."
+    },
+    "swing_position": {
+      "message": "La posición de oscilación no es válida."
+    },
+    "signal_function": {
+      "message": "La señal no corresponde a esta función."
+    },
+    "signal_missing": {
+      "message": "La señal no existe. Aprende la señal de nuevo."
+    },
+    "signal_missing_relearn": {
+      "message": "La señal no existe. Vuelve a aprenderla."
+    },
+    "configuration_version": {
+      "message": "La versión de la configuración no es válida."
+    },
+    "name_visibility": {
+      "message": "La visibilidad del nombre no es válida."
+    },
+    "dual_learned_actions": {
+      "message": "Las acciones aprendidas del botón doble no son válidas."
+    },
+    "folder_independent_actions": {
+      "message": "Las acciones independientes de la carpeta no son válidas."
+    },
+    "independent_stateful_required": {
+      "message": "Las acciones independientes necesitan un mando con estados."
+    },
+    "editor_cell_count": {
+      "message": "Las casillas del editor no coinciden con las columnas."
+    },
+    "signal_references": {
+      "message": "Las referencias de señal no son válidas."
+    },
+    "controlled_fields_changed": {
+      "message": "Los ajustes combinados del mando han cambiado. Recarga antes de enviarlos."
+    },
+    "saved_state_retained": {
+      "message": "Los ajustes de un estado guardado se conservan. Crea otro estado para cambiarlos."
+    },
+    "controlled_fields_invalid": {
+      "message": "Los ajustes incluidos en el estado no son válidos."
+    },
+    "capture_scope_retained": {
+      "message": "Los ajustes incluidos en una captura existente se conservan. Crea otro estado para cambiarlos."
+    },
+    "entity_changes": {
+      "message": "Los cambios de entidades no son válidos."
+    },
+    "saved_states_invalid": {
+      "message": "Los estados guardados del mando no son válidos."
+    },
+    "entity_save_failed": {
+      "message": "No se ha podido guardar el cambio de entidad."
+    },
+    "configuration_save_failed": {
+      "message": "No se ha podido guardar la configuración."
+    },
+    "entity_restore_failed": {
+      "message": "No se ha podido restaurar el nombre de la entidad. Revisa el registro de entidades antes de volver a guardar."
+    },
+    "source_change_forbidden": {
+      "message": "No se puede cambiar el emisor físico de un mando existente."
+    },
+    "identifier_reuse": {
+      "message": "No se puede reutilizar un identificador interno para otro tipo de elemento."
+    },
+    "device_move": {
+      "message": "No se pueden mover dispositivos existentes a otro emisor."
+    },
+    "function_move": {
+      "message": "No se pueden mover funciones existentes a otro dispositivo."
+    },
+    "signal_confirmation_required": {
+      "message": "Prueba primero la señal y confirma que el aparato ha respondido."
+    },
+    "function_limit": {
+      "message": "Se ha superado el límite de funciones."
+    },
+    "entity_rename_type": {
+      "message": "Solo se puede cambiar la entidad de una función existente del mismo tipo."
+    },
+    "dual_learned_only": {
+      "message": "Solo un botón doble puede tener acciones aprendidas separadas."
+    },
+    "independent_button_required": {
+      "message": "Solo una entidad button puede tener una acción independiente."
+    },
+    "controlled_setting_invalid": {
+      "message": "Un ajuste incluido en el estado no es válido."
+    },
+    "duplicate_editor_element": {
+      "message": "Un elemento del editor aparece más de una vez."
+    },
+    "simple_climate_settings": {
+      "message": "Un mando de botones no puede modificar ajustes de climatización."
+    },
+    "independent_learned_button": {
+      "message": "Una acción independiente debe ser un botón aprendido de un mando con estados."
+    },
+    "independent_complete_state": {
+      "message": "Una acción independiente no puede representar un estado completo."
+    },
+    "editor_entity_mismatch": {
+      "message": "Una función del editor no corresponde a una entidad real de este mando."
+    },
+    "function_repeated": {
+      "message": "Una función está repetida o situada en una fila incorrecta."
+    },
+    "capture_invalid": {
+      "message": "No se ha capturado una señal válida. Vuelve a aprenderla."
+    },
+    "source_operation_failed": {
+      "message": "No se ha podido completar la operación con el emisor."
+    },
+    "invalid_model_name": {
+      "message": "El modelo no es válido."
+    },
+    "invalid_auto_mode": {
+      "message": "El modo automático no es válido."
+    },
+    "invalid_function_name": {
+      "message": "El nombre de la función no es válido."
+    },
+    "invalid_device_name": {
+      "message": "El nombre del dispositivo no es válido."
+    },
+    "invalid_source_name": {
+      "message": "El nombre del emisor no es válido."
+    },
+    "invalid_button_action": {
+      "message": "La acción del botón no es válido."
+    },
+    "invalid_visible_action": {
+      "message": "La acción visible no es válido."
+    },
+    "invalid_height": {
+      "message": "La altura no es válido."
+    },
+    "invalid_display_height": {
+      "message": "La altura de la pantalla no es válido."
+    },
+    "invalid_display_width": {
+      "message": "La anchura de la pantalla no es válido."
+    },
+    "invalid_position_count": {
+      "message": "La cantidad de posiciones no es válido."
+    },
+    "invalid_speed_count": {
+      "message": "La cantidad de velocidades no es válido."
+    },
+    "invalid_state_date": {
+      "message": "La fecha del estado no es válido."
+    },
+    "invalid_display_information": {
+      "message": "La información de la pantalla no es válido."
+    },
+    "invalid_swing_auto": {
+      "message": "La oscilación automática no es válido."
+    },
+    "invalid_swing_off": {
+      "message": "La oscilación desactivada no es válido."
+    },
+    "invalid_temperature": {
+      "message": "La temperatura no es válido."
+    },
+    "invalid_text_visibility": {
+      "message": "La visibilidad del texto no es válido."
+    },
+    "invalid_column_count": {
+      "message": "Las columnas no es válido."
+    }
   }
 }

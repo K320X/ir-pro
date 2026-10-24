@@ -1,6 +1,6 @@
-import {icon} from './ir-pro-icons.js?v=1.0.2';
-export function mountIconPickers(scope,lifecycle) {
-  'use strict';
+import {icon} from './ir-pro-icons.js?v=1.0.3';
+import {createI18n} from './ir-pro-i18n.js?v=1.0.3';
+export function mountIconPickers(scope,lifecycle,locale=createI18n('es')) {
   // Keep native selects as the model-facing source; the visible picker adds SVG previews.
   const host=scope.querySelector('#modal-body');
   if(!host)return;
@@ -8,6 +8,7 @@ export function mountIconPickers(scope,lifecycle) {
   const instances=new Set(), mounted=new WeakMap();
   let active=null, serial=0, queued=false;
   const escape=value=>String(value).replace(/[&<>"']/g,char=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
+  const bindLabel=(element,source)=>{element.setAttribute('data-ir-i18n-aria-label',JSON.stringify([source,{}]));element.setAttribute('aria-label',locale.t(source));};
   const preview=value=>value==='none'?'<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="8"/><path d="m6.5 6.5 11 11"/></svg>':typeof icon==='function'?icon(value):'';
 
   function closePicker(instance=active) {
@@ -63,13 +64,15 @@ export function mountIconPickers(scope,lifecycle) {
     const choices=Array.from(instance.select.options);
     const signature=JSON.stringify(choices.map(option=>[option.value,option.textContent,option.disabled]));
     if(signature!==instance.signature) {
+      const scroll=instance.list.scrollTop;
       instance.signature=signature;
       instance.list.innerHTML=choices.map((option,index)=>'<div class="ir-icon-option" id="'+instance.id+'-option-'+index+'" role="option" data-icon-option="'+index+'" aria-selected="false"'+(option.disabled?' aria-disabled="true"':'')+'><span class="ir-icon-preview">'+preview(option.value)+'</span><span>'+escape(option.textContent)+'</span></div>').join('');
+      if(active===instance){highlight(instance,instance.highlighted);instance.list.scrollTop=scroll;}
     }
     const value=instance.select.value,current=choices[instance.select.selectedIndex];
     if(instance.value!==value||instance.label!==current?.textContent) {
       instance.value=value;instance.label=current?.textContent;
-      instance.trigger.innerHTML='<span class="ir-icon-preview">'+preview(value)+'</span><span class="ir-icon-selected-label">'+escape(current?.textContent||'Seleccionar icono')+'</span><svg class="ir-icon-chevron" viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>';
+      instance.trigger.innerHTML='<span class="ir-icon-preview">'+preview(value)+'</span><span class="ir-icon-selected-label">'+escape(current?.textContent||locale.t('Seleccionar icono'))+'</span><svg class="ir-icon-chevron" viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>';
       Array.from(instance.list.children).forEach((item,index)=>item.setAttribute('aria-selected',String(index===instance.select.selectedIndex)));
     }
     instance.trigger.disabled=instance.select.disabled;
@@ -77,8 +80,8 @@ export function mountIconPickers(scope,lifecycle) {
   function mount(select) {
     const id='ir-icon-picker-'+(++serial),wrapper=document.createElement('div'),trigger=document.createElement('button'),list=document.createElement('div');
     wrapper.className='ir-icon-picker';trigger.className='ir-icon-picker-trigger';trigger.type='button';trigger.id=id;
-    trigger.setAttribute('role','combobox');trigger.setAttribute('aria-label','Icono');trigger.setAttribute('aria-haspopup','listbox');trigger.setAttribute('aria-expanded','false');trigger.setAttribute('aria-controls',id+'-list');
-    list.className='ir-icon-list';list.id=id+'-list';list.setAttribute('role','listbox');list.setAttribute('aria-label','Iconos');list.hidden=true;
+    trigger.setAttribute('role','combobox');bindLabel(trigger,'Icono');trigger.setAttribute('aria-haspopup','listbox');trigger.setAttribute('aria-expanded','false');trigger.setAttribute('aria-controls',id+'-list');
+    list.className='ir-icon-list';list.id=id+'-list';list.setAttribute('role','listbox');bindLabel(list,'Iconos');list.hidden=true;
     select.hidden=true;select.setAttribute('aria-hidden','true');select.tabIndex=-1;
     select.insertAdjacentElement('afterend',wrapper);wrapper.append(trigger,list);
     const instance={select,wrapper,trigger,list,id,signature:null,value:null,highlighted:0,typed:'',typedAt:0};
@@ -103,7 +106,7 @@ export function mountIconPickers(scope,lifecycle) {
       else if(event.key.length===1&&!event.ctrlKey&&!event.metaKey&&!event.altKey) {
         event.preventDefault();if(active!==instance)openPicker(instance);
         const now=Date.now();instance.typed=now-instance.typedAt<700?instance.typed+event.key:event.key;instance.typedAt=now;
-        const normalize=text=>text.normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLocaleLowerCase('es');
+        const normalize=text=>text.normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLocaleLowerCase(locale.language);
         const query=normalize(instance.typed),index=options.findIndex(option=>!option.disabled&&normalize(option.textContent.trim()).startsWith(query));
         if(index>=0)highlight(instance,index);
       }

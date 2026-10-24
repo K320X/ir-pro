@@ -4,11 +4,433 @@
     "step": {
       "user": {
         "title": "IR Pro",
-        "description": "Crea mandos visuales con tus emisores Broadlink existentes. La integración comienza vacía. Añade los emisores y dispositivos desde el panel IR Pro."
+        "description": "Create visual remotes using existing Broadlink transmitters. IR Pro starts empty. Add transmitters and virtual devices in its panel."
       }
     },
     "abort": {
-      "already_configured": "IR Pro ya está configurado."
+      "already_configured": "IR Pro is already configured."
+    }
+  },
+  "exceptions": {
+    "operation_failed": {
+      "message": "Unable to complete the operation."
+    },
+    "permission_denied": {
+      "message": "Only administrators can perform this operation."
+    },
+    "not_loaded": {
+      "message": "IR Pro is not loaded."
+    },
+    "single_installation": {
+      "message": "Only one IR Pro installation is allowed."
+    },
+    "learned_action_index": {
+      "message": "Each learned action must belong to a different side of the dual-action button."
+    },
+    "function_placement": {
+      "message": "Each function must appear exactly once in the remote."
+    },
+    "mixed_dual_actions": {
+      "message": "Each learned side of a mixed button needs its own action; two learned sides use one switch entity."
+    },
+    "independent_setting": {
+      "message": "The independent action's setting is invalid."
+    },
+    "dual_action_count": {
+      "message": "The dual-action button needs two actions."
+    },
+    "folder_content": {
+      "message": "The folder contents are invalid."
+    },
+    "device_changed_learning": {
+      "message": "The device changed while learning the signal."
+    },
+    "signal_source": {
+      "message": "The device and signal do not belong to this transmitter."
+    },
+    "device_missing": {
+      "message": "The device no longer exists."
+    },
+    "editor_limit": {
+      "message": "The editor contains too many functions or levels."
+    },
+    "signal_effect_retained": {
+      "message": "An existing signal's effect is preserved. Create another function to change it."
+    },
+    "editor_effect_mismatch": {
+      "message": "The editor effect does not match its actual function."
+    },
+    "source_offline": {
+      "message": "The transmitter is disconnected or disabled."
+    },
+    "source_busy": {
+      "message": "The transmitter is busy. Wait for the operation to finish."
+    },
+    "source_unavailable": {
+      "message": "The transmitter is unavailable in Home Assistant."
+    },
+    "source_timeout": {
+      "message": "The transmitter timed out. Wait a few seconds and try again."
+    },
+    "source_missing": {
+      "message": "The transmitter is no longer available in Home Assistant."
+    },
+    "off_state_fields": {
+      "message": "The off state includes only the power setting."
+    },
+    "dual_state_invalid": {
+      "message": "The dual-action button's state is invalid."
+    },
+    "remote_state_invalid": {
+      "message": "The remote state is invalid."
+    },
+    "saved_state_changed": {
+      "message": "The saved state changed. Reload the remote before sending it."
+    },
+    "saved_state_entity": {
+      "message": "The saved state does not belong to a button entity of this remote."
+    },
+    "device_icon": {
+      "message": "The device icon is invalid."
+    },
+    "function_style": {
+      "message": "The function icon or color is invalid."
+    },
+    "editor_style": {
+      "message": "The editor icon or color is invalid."
+    },
+    "editor_id": {
+      "message": "The editor identifier is invalid."
+    },
+    "remote_mode_speed": {
+      "message": "The remote mode or fan speed is invalid."
+    },
+    "entity_identifier": {
+      "message": "The entity ID must keep the button. or switch. domain and use a valid identifier."
+    },
+    "cell_count": {
+      "message": "The number of cells does not match the columns."
+    },
+    "send_mode": {
+      "message": "The function's send type is invalid."
+    },
+    "editor_row_type": {
+      "message": "The editor row type is invalid."
+    },
+    "editor_function_type": {
+      "message": "The editor function type is invalid."
+    },
+    "editor_remote_type": {
+      "message": "The editor remote type is invalid."
+    },
+    "editor_action_value": {
+      "message": "The editor action value is invalid."
+    },
+    "stateful_remote_required": {
+      "message": "This device is not a remote with states."
+    },
+    "learning_unsupported": {
+      "message": "This transmitter does not support learning signals."
+    },
+    "source_duplicate": {
+      "message": "This transmitter has already been added."
+    },
+    "state_not_learned": {
+      "message": "This state has no learned signal. First learn this state from the original remote."
+    },
+    "duplicate_entities": {
+      "message": "There are duplicate entities."
+    },
+    "duplicate_internal_ids": {
+      "message": "There are duplicate internal identifiers."
+    },
+    "duplicate_independent_options": {
+      "message": "There are duplicate independent options in this folder."
+    },
+    "invalid_device": {
+      "message": "A device is invalid."
+    },
+    "invalid_source": {
+      "message": "A transmitter is invalid."
+    },
+    "invalid_saved_state": {
+      "message": "A saved state is invalid."
+    },
+    "invalid_internal_id": {
+      "message": "An internal identifier is invalid."
+    },
+    "invalid_editor_row": {
+      "message": "An editor row is invalid."
+    },
+    "invalid_row": {
+      "message": "A row is invalid."
+    },
+    "invalid_columns_or_row": {
+      "message": "There is a duplicate row or an invalid column count."
+    },
+    "invalid_function": {
+      "message": "A function is invalid."
+    },
+    "invalid_stored_signal": {
+      "message": "A stored signal reference is invalid."
+    },
+    "ambiguous_state": {
+      "message": "There are multiple captures for these settings. Keep only one before sending the state."
+    },
+    "reloading": {
+      "message": "IR Pro is reloading."
+    },
+    "learned_action_effect": {
+      "message": "A learned action must be a button that does not change settings."
+    },
+    "editor_action": {
+      "message": "The editor action is invalid."
+    },
+    "independent_one_setting": {
+      "message": "An independent action must change exactly one setting."
+    },
+    "row_height": {
+      "message": "The row height is invalid."
+    },
+    "capture_fields_changed": {
+      "message": "The capture must include only the remote's current combined settings. Reload the panel before learning the state."
+    },
+    "folder_limit": {
+      "message": "The folder contains too many functions."
+    },
+    "collection_limit": {
+      "message": "The collection is invalid or exceeds the allowed size."
+    },
+    "editor_element_limit": {
+      "message": "The editor configuration contains too many elements."
+    },
+    "editor_json": {
+      "message": "The editor configuration does not contain valid JSON."
+    },
+    "editor_size": {
+      "message": "The editor configuration exceeds the allowed size."
+    },
+    "editor_depth": {
+      "message": "The editor configuration has too many levels."
+    },
+    "stored_configuration": {
+      "message": "The saved IR Pro configuration is invalid."
+    },
+    "revision_conflict": {
+      "message": "The configuration changed in another window. Reload before saving."
+    },
+    "invalid_configuration": {
+      "message": "The configuration is invalid."
+    },
+    "row_layout": {
+      "message": "The row layout is invalid."
+    },
+    "editor_layout": {
+      "message": "The editor layout is invalid."
+    },
+    "entity_domain": {
+      "message": "The entity must use button. or switch. and a valid name."
+    },
+    "entity_occupied": {
+      "message": "The chosen entity ID is already in use. Enter another identifier."
+    },
+    "entity_ownership": {
+      "message": "The entity does not belong to this IR Pro integration."
+    },
+    "function_identity_retained": {
+      "message": "An existing function's entity and type are preserved."
+    },
+    "editor_function": {
+      "message": "The editor function is invalid."
+    },
+    "function_unavailable": {
+      "message": "The function is unavailable or its signals need to be learned."
+    },
+    "new_function_identifier": {
+      "message": "The new function needs a valid identifier."
+    },
+    "function_missing": {
+      "message": "The function is no longer available."
+    },
+    "action_identity_retained": {
+      "message": "An existing action's identity is preserved."
+    },
+    "independent_effect_mismatch": {
+      "message": "The independent option does not match its signal's setting."
+    },
+    "remote_display": {
+      "message": "The remote display is invalid."
+    },
+    "swing_position": {
+      "message": "The swing position is invalid."
+    },
+    "signal_function": {
+      "message": "The signal does not belong to this function."
+    },
+    "signal_missing": {
+      "message": "The signal does not exist. Learn it again."
+    },
+    "signal_missing_relearn": {
+      "message": "The signal does not exist. Learn it again."
+    },
+    "configuration_version": {
+      "message": "The configuration version is invalid."
+    },
+    "name_visibility": {
+      "message": "The name visibility is invalid."
+    },
+    "dual_learned_actions": {
+      "message": "The dual-action button's learned actions are invalid."
+    },
+    "folder_independent_actions": {
+      "message": "The folder's independent actions are invalid."
+    },
+    "independent_stateful_required": {
+      "message": "Independent actions need a remote with states."
+    },
+    "editor_cell_count": {
+      "message": "The editor cells do not match the columns."
+    },
+    "signal_references": {
+      "message": "The signal references are invalid."
+    },
+    "controlled_fields_changed": {
+      "message": "The remote's combined settings changed. Reload before sending them."
+    },
+    "saved_state_retained": {
+      "message": "A saved state's settings are preserved. Create another state to change them."
+    },
+    "controlled_fields_invalid": {
+      "message": "The settings included in the state are invalid."
+    },
+    "capture_scope_retained": {
+      "message": "The settings included in an existing capture are preserved. Create another state to change them."
+    },
+    "entity_changes": {
+      "message": "The entity changes are invalid."
+    },
+    "saved_states_invalid": {
+      "message": "The remote's saved states are invalid."
+    },
+    "entity_save_failed": {
+      "message": "Unable to save the entity ID change."
+    },
+    "configuration_save_failed": {
+      "message": "Unable to save the configuration."
+    },
+    "entity_restore_failed": {
+      "message": "Unable to restore the entity ID. Check the entity registry before saving again."
+    },
+    "source_change_forbidden": {
+      "message": "An existing remote's physical transmitter cannot be changed."
+    },
+    "identifier_reuse": {
+      "message": "An internal identifier cannot be reused for a different type of item."
+    },
+    "device_move": {
+      "message": "Existing devices cannot be moved to another transmitter."
+    },
+    "function_move": {
+      "message": "Existing functions cannot be moved to another device."
+    },
+    "signal_confirmation_required": {
+      "message": "Test the signal first and confirm that the device responded."
+    },
+    "function_limit": {
+      "message": "The function limit has been exceeded."
+    },
+    "entity_rename_type": {
+      "message": "Only an existing function's entity of the same type can be renamed."
+    },
+    "dual_learned_only": {
+      "message": "Only a dual-action button can have separate learned actions."
+    },
+    "independent_button_required": {
+      "message": "Only a button entity can have an independent action."
+    },
+    "controlled_setting_invalid": {
+      "message": "A setting included in the state is invalid."
+    },
+    "duplicate_editor_element": {
+      "message": "An editor item appears more than once."
+    },
+    "simple_climate_settings": {
+      "message": "A button remote cannot change climate settings."
+    },
+    "independent_learned_button": {
+      "message": "An independent action must be a learned button of a remote with states."
+    },
+    "independent_complete_state": {
+      "message": "An independent action cannot represent a complete state."
+    },
+    "editor_entity_mismatch": {
+      "message": "An editor function does not belong to an actual entity of this remote."
+    },
+    "function_repeated": {
+      "message": "A function is repeated or placed in an incorrect row."
+    },
+    "capture_invalid": {
+      "message": "No valid signal was captured. Learn it again."
+    },
+    "source_operation_failed": {
+      "message": "Unable to complete the operation with the transmitter."
+    },
+    "invalid_model_name": {
+      "message": "The model is invalid."
+    },
+    "invalid_auto_mode": {
+      "message": "The automatic mode is invalid."
+    },
+    "invalid_function_name": {
+      "message": "The function name is invalid."
+    },
+    "invalid_device_name": {
+      "message": "The device name is invalid."
+    },
+    "invalid_source_name": {
+      "message": "The transmitter name is invalid."
+    },
+    "invalid_button_action": {
+      "message": "The button action is invalid."
+    },
+    "invalid_visible_action": {
+      "message": "The visible action is invalid."
+    },
+    "invalid_height": {
+      "message": "The height is invalid."
+    },
+    "invalid_display_height": {
+      "message": "The display height is invalid."
+    },
+    "invalid_display_width": {
+      "message": "The display width is invalid."
+    },
+    "invalid_position_count": {
+      "message": "The position count is invalid."
+    },
+    "invalid_speed_count": {
+      "message": "The fan speed count is invalid."
+    },
+    "invalid_state_date": {
+      "message": "The state date is invalid."
+    },
+    "invalid_display_information": {
+      "message": "The display information is invalid."
+    },
+    "invalid_swing_auto": {
+      "message": "The automatic swing setting is invalid."
+    },
+    "invalid_swing_off": {
+      "message": "The disabled swing setting is invalid."
+    },
+    "invalid_temperature": {
+      "message": "The temperature is invalid."
+    },
+    "invalid_text_visibility": {
+      "message": "The text visibility is invalid."
+    },
+    "invalid_column_count": {
+      "message": "The column count is invalid."
     }
   }
 }

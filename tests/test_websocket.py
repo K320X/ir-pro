@@ -100,7 +100,7 @@ class WebSocketTests(unittest.IsolatedAsyncioTestCase):
                 self.manager.async_save_model.assert_not_awaited()
                 connection.send_result.assert_not_called()
                 connection.send_error.assert_called_once_with(
-                    16, "permission_denied", "Solo los administradores pueden realizar esta operación."
+                    16, "permission_denied", "Only administrators can perform this operation."
                 )
 
     async def test_authorized_save_forwards_exact_entity_renames_and_revision(self):
@@ -191,7 +191,7 @@ class WebSocketTests(unittest.IsolatedAsyncioTestCase):
     async def test_domain_error_preserves_safe_code_and_message(self):
         self.manager.async_save_model.side_effect = self.websocket.IRProError("revision_conflict", "Recarga antes de guardar.")
         connection = self.connection(admin=True)
-        await self.websocket.ws_save(self.hass, connection, {"id": 2, "model": {}, "expected_revision": 0})
+        await self.websocket.ws_save(self.hass, connection, {"id": 2, "model": {}, "expected_revision": 0, "language": "es"})
         connection.send_error.assert_called_once_with(2, "revision_conflict", "Recarga antes de guardar.")
         connection.send_result.assert_not_called()
 

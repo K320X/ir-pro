@@ -1,4 +1,4 @@
-import {independentStateEffect,linkedActionEffect} from './ir-pro-model.js?v=1.0.2';
+import {independentStateEffect,linkedActionEffect} from './ir-pro-model.js?v=1.0.3';
 
 const metadata=['entity','_existingType','on','signals','signal_refs'];
 const collections=['children','independentActions','learnedActions'];

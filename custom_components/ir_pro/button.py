@@ -4,6 +4,7 @@ from homeassistant.components.button import ButtonEntity
 from homeassistant.exceptions import HomeAssistantError
 
 from .entity import IRProEntity
+from .const import DOMAIN
 from .errors import IRProError
 
 
@@ -18,4 +19,6 @@ class IRProButton(IRProEntity, ButtonEntity):
         try:
             await self.manager.async_press(self.key)
         except IRProError as err:
-            raise HomeAssistantError(err.message) from err
+            raise HomeAssistantError(
+                translation_domain=DOMAIN, translation_key=err.translation_key,
+            ) from err

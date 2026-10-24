@@ -1,3 +1,4 @@
+import {withLocale} from './frontend-test-locale.mjs';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import vm from 'node:vm';
@@ -26,7 +27,7 @@ const app={
 const context={app,view:'remote',saveFailed:true,actionError:'',editing:false,model:{emitters:[],selected:'rolled-back-device'},ensureModelEntities(){},captureScrollPosition:()=>()=>{},refreshAmbientReadings(){},lastAmbientSnapshot:'',lastRenderedRoute:'',queueMicrotask(){},flushDeferredEnvelope(){},glyph:()=>'',esc:value=>value??''};
 context.selected=()=>context.model.emitters.flatMap(emitter=>emitter.devices).find(device=>device.id===context.model.selected);
 context.emitterFor=id=>context.model.emitters.find(emitter=>emitter.devices.some(device=>device.id===id));
-vm.createContext(context);vm.runInContext(renderCode,context);
+vm.createContext(withLocale(context));vm.runInContext(renderCode,context);
 
 // A failed new remote no longer exists in the confirmed model. Route to home
 // before rendering, while retaining exactly one persistent save failure alert.
@@ -38,7 +39,7 @@ vm.runInContext('render();',context);assert.equal(warningCount,1);
 const remote={id:'existing',name:'Split salón',type:'simple',icon:'remote',rows:[]};
 context.model={emitters:[{id:'emitter',name:'IR salón',model:'RM4 mini',devices:[remote]}],selected:remote.id};context.view='remote';
 vm.runInContext('render();render();',context);assert.equal(warningCount,1);assert.match(html,/Split salón/);
-assert.match(html,/class="remote-navigation"[\s\S]*data-home>[\s\S]*Emisores<\/button><span class="muted remote-emitter">IR salón<\/span>/);
+assert.match(html,/class="remote-navigation"[\s\S]*data-home>[\s\S]*Emisores<\/span><\/button><span class="muted remote-emitter">IR salón<\/span>/);
 assert.ok(!html.includes('<h1>Split salón</h1><p class="muted">IR salón</p>'));
 assert.match(source,/hassChanged\(\)\{refreshAmbientReadings\(\);\}/,'HA state updates must only patch ambient values, preserving the existing view and alerts');
 
@@ -53,7 +54,7 @@ vm.runInContext("handleActionError({message:'Fallo de conexión'});clearActionEr
 // Informational feedback remains an aria-live announcement, without a visible
 // lower notification or hidden=true that would silence assistive technology.
 const classes=new Set(['visible','show']);
-const notice={textContent:'',hidden:true,classList:{remove(...names){names.forEach(name=>classes.delete(name));},add(name){classes.add(name);}}};
+const notice={textContent:'',hidden:true,attributes:{},setAttribute(name,value){this.attributes[name]=value;},classList:{remove(...names){names.forEach(name=>classes.delete(name));},add(name){classes.add(name);}}};
 context.$=selector=>selector==='#toast'?notice:null;context.toastTimer=null;context.clearTimeout=()=>{};context.setTimeout=()=>1;
 vm.runInContext(extract('toast')+"\ntoast('Entidad copiada.');",context);
 assert.equal(notice.textContent,'Entidad copiada.');assert.equal(notice.hidden,false);assert.ok(classes.has('sr-only'));assert.ok(!classes.has('visible'));assert.ok(!classes.has('show'));
@@ -102,13 +103,13 @@ assert.deepEqual(restoredTV.rows[0].cells[1].signal_refs,{on:'captured-tv-on',of
 // its single tile sends those two actions alternately through the real handler.
 const learningTarget={innerHTML:''};
 const learningContext={d:tv,draft:tvPower,signalBusy:false,$:()=>learningTarget,$$:()=>[],esc:String,glyph:()=>'',independentStateEffect};
-vm.createContext(learningContext);
+vm.createContext(withLocale(learningContext));
 vm.runInContext(source.split('\n').find(line=>line.trimStart().startsWith('const entityDomain ='))+'\n'+source.slice(source.indexOf('    const renderLearningFields=()=>'),source.indexOf('    const openEntityEditor='))+'\nrenderLearningFields();',learningContext);
-assert.match(learningTarget.innerHTML,/Encender · Acción 1/);assert.match(learningTarget.innerHTML,/Apagar · Acción 2/);
+assert.match(learningTarget.innerHTML.replace(/<[^>]+>/g,''),/Encender · Acción 1/);assert.match(learningTarget.innerHTML.replace(/<[^>]+>/g,''),/Apagar · Acción 2/);
 assert.match(learningTarget.innerHTML,/data-signal="on"/);assert.match(learningTarget.innerHTML,/data-signal="off"/);assert.ok(!learningTarget.innerHTML.includes('data-signal="press"'));
 const powerCalls=[];
 const tvRuntime={d:restoredTV,b:restoredTV.rows[0].cells[1],independentSending:false,signalBusy:false,disposed:false,dualStateIndex:(d,b)=>b.activeSide===1?1:0,dualPowerLinked:()=>false,dualActions:b=>b.actions,queuePhysical:async action=>action(),api:{call:async(action,data)=>{powerCalls.push([action,data]);return {on:data.on};}},render(){},toast(){}};
-vm.createContext(tvRuntime);vm.runInContext(extract('learnedActionFor')+'\n'+extract('executeAction'),tvRuntime);
+vm.createContext(withLocale(tvRuntime));vm.runInContext(extract('learnedActionFor')+'\n'+extract('executeAction'),tvRuntime);
 assert.equal(await vm.runInContext('executeAction(d,b)',tvRuntime),true);assert.equal(tvRuntime.b.activeSide,1);
 assert.equal(await vm.runInContext('executeAction(d,b)',tvRuntime),true);assert.equal(tvRuntime.b.activeSide,0);
 assert.deepEqual(powerCalls.map(([action,data])=>[action,data.function_key,data.on]),[['press',tvPower.id,true],['press',tvPower.id,false]]);
@@ -117,10 +118,10 @@ assert.deepEqual(powerCalls.map(([action,data])=>[action,data.function_key,data.
 // template without another type selector. Later name/icon edits are cosmetic.
 let deviceDialog,creationSaves=0,creationCloses=0,creationRenders=0;
 const creationFields=new Map();
-const input=(value='')=>({value,textContent:'',listeners:{},addEventListener(name,callback){this.listeners[name]=callback;}});
+const input=(value='')=>({value,textContent:'',attributes:{},setAttribute(name,value){this.attributes[name]=value;},listeners:{},addEventListener(name,callback){this.listeners[name]=callback;}});
 const creationEmitter={id:'creation-emitter',sourceId:'creation-source',name:'IR salón',devices:[]};
 const creationContext={uid:randomUUID,copy:structuredClone,independentStateEffect,model:{version:1,emitters:[creationEmitter]},view:'home',editing:true,esc:String,modalAbort:{signal:{}},$:selector=>creationFields.get(selector),showModal(title,body,buttons,setup){deviceDialog={title,body,buttons};setup?.();},persist(){creationSaves++;},closeModal(){creationCloses++;},render(){creationRenders++;},toast(){},formError(message){throw new Error(message);}};
-vm.createContext(creationContext);
+vm.createContext(withLocale(creationContext));
 vm.runInContext(factoryOptions+'\n'+['selectOptions','field'].map(name=>source.split('\n').find(line=>line.trimStart().startsWith('const '+name+' ='))).join('\n')+'\n'+constructors+'\n'+extract('newDevice')+'\n'+extract('renameDevice'),creationContext);
 for(const [index,icon] of ['air-vent','wind','tv'].entries()){
   creationFields.set('#new-device-name',input('Nuevo '+index));creationFields.set('#new-device-icon',input('air-vent'));creationFields.set('#template-description',input());
@@ -158,9 +159,9 @@ assert.equal(vm.runInContext("displayAccent('#c6b5ff')",context),'#c6b5ff');
 assert.match(source,/draft\.accent=displayAccent\(draft\.accent\)/,'Editing must show the same resolved color in its picker and preview');
 
 const captureContext={controlledStateFields,recordStateFields,stateRecordMatches,viewedSavedStateId:null,savedStateFor:()=>null,configurationKey:JSON.stringify,configurationLabel:()=> 'Apagado',esc:String,glyph:()=>'',stateTable:()=>'',d:{state:{power:false},savedStates:[]}};
-vm.createContext(captureContext);vm.runInContext(extract('stateCapturePanel'),captureContext);
+vm.createContext(withLocale(captureContext));vm.runInContext(extract('stateCapturePanel'),captureContext);
 const captureHTML=vm.runInContext('stateCapturePanel(d)',captureContext);
-assert.match(captureHTML,/data-learn-state>Aprender estado<\/button>/);
+assert.match(captureHTML,/data-learn-state><span data-ir-text="[^"]+">Aprender estado<\/span><\/button>/);
 assert.ok(!captureHTML.includes('Aprender este estado del mando original'));
 
 // Bulk deletion is a separate server operation. The confirmation does not edit
@@ -175,7 +176,7 @@ bulkDevice.layout.rows.push({id:'layout-'+savedId,columns:1,height:2,cells:[save
 const deletedWire=structuredClone(bulkWire);deletedWire.emitters[0].devices[0].studio.savedStates=[];deletedWire.emitters[0].devices[0].functions=deletedWire.emitters[0].devices[0].functions.filter(fn=>fn.key!==savedId);deletedWire.emitters[0].devices[0].layout.rows=deletedWire.emitters[0].devices[0].layout.rows.filter(row=>!row.cells.includes(savedId));
 let bulkDialog,bulkError='',bulkClosed=0,bulkRenders=0,bulkCalls=[],queuedRequest;
 const bulkContext={recordStateFields,isAdmin:true,saveFailed:false,signalBusy:false,independentSending:false,disposed:false,revision:10,catalog:[],confirmedWire:structuredClone(bulkWire),model:importModel(bulkWire,bulkDevice.id),viewedSavedStateId:savedId,importModel,copy:structuredClone,validateDevice:()=>true,esc:String,glyph:()=>'',configurationLabel:()=> 'Apagado',configurationKey:JSON.stringify,showModal(title,body,buttons){bulkDialog={title,body,buttons};},queueRequest:action=>new Promise((resolve,reject)=>{queuedRequest=async()=>{try{resolve(await action());}catch(error){reject(error);}};}),api:{call:async(action,data)=>{bulkCalls.push([action,data]);return {revision:12,model:deletedWire,catalog:[{id:'updated'}]};}},closeModal(){bulkClosed++;},render(){bulkRenders++;},toast(){},formError(message){bulkError=message;}};
-vm.createContext(bulkContext);vm.runInContext(extract('deleteAllSavedStates')+'\n'+extract('stateTable'),bulkContext);bulkContext.d=bulkContext.model.emitters[0].devices[0];
+vm.createContext(withLocale(bulkContext));vm.runInContext(extract('deleteAllSavedStates')+'\n'+extract('stateTable'),bulkContext);bulkContext.d=bulkContext.model.emitters[0].devices[0];
 const bulkBefore=JSON.stringify(bulkContext.model);
 vm.runInContext('deleteAllSavedStates(d)',bulkContext);
 assert.deepEqual(Array.from(bulkDialog.buttons,button=>button.label),['Cancelar','Eliminar estados']);assert.equal(bulkCalls.length,0);assert.equal(JSON.stringify(bulkContext.model),bulkBefore);
@@ -204,7 +205,7 @@ for(const response of [new Error('La configuración ha cambiado. Recarga el pane
 // invalid_signal for an apparently learned state must remain a real inline error.
 let sends=0,learned=false,sendFailure=null;
 const sendContext={independentSending:false,emitterFor:()=>({sourceId:'source'}),copy:structuredClone,controlledStateFields,d:{id:'remote',state:fresh.state},configurationCopy:state=>({...state}),render(){},toast(){},clearActionError(){},savedStateFor:()=>learned?{signal:{kind:'learned',id:'real'}}:null,persist:async after=>{try{return await after();}catch(error){sendFailure=error;return false;}},api:{call:async()=>{sends++;throw {code:'invalid_signal',message:'Referencia perdida'};}}};
-vm.createContext(sendContext);vm.runInContext(extract('commitState'),sendContext);
+vm.createContext(withLocale(sendContext));vm.runInContext(extract('commitState'),sendContext);
 assert.equal(await vm.runInContext("commitState(d,'Preparado',true)",sendContext),false);assert.equal(sends,0);
 learned=true;assert.equal(await vm.runInContext("commitState(d,'Enviar',true)",sendContext),false);assert.equal(sends,1);assert.equal(sendFailure.code,'invalid_signal');
 console.log('Frontend rendering, quiet accessible feedback, state remote defaults, canonical entities and unlearned-send guards passed.');
@@ -219,7 +220,7 @@ const element=()=>({value:'',textContent:'',innerHTML:'',hidden:false,disabled:f
 for(const id of ['state-record-name','state-record-entity','state-learn-status','retry-state-capture','test-state-capture'])elements.set('#'+id,element());
 let captureDialog,captureCalls=[],captureSaves=0,captureSnapshot;
 const scopedContext={d:scopedRemote,controlledStateFields,recordStateFields,projectState,stateRecordMatches,findSavedState,isAdmin:true,saveFailed:false,signalBusy:false,disposed:false,operation:0,viewedSavedStateId:null,saveQueue:Promise.resolve(),modalFoot:{lastElementChild:{disabled:false}},modalAbort:{signal:new AbortController().signal},uid:randomUUID,copy:structuredClone,esc:String,glyph:()=>'',clamp:(value,min,max,fallback)=>Number.isFinite(Number(value))?Math.min(max,Math.max(min,Math.round(Number(value)))):fallback,emitterFor:()=>({name:'IR salón',sourceId:'source'}),allEntityRecords:()=>[],field:(label,input)=>'<label>'+label+input+'</label>',$:selector=>elements.get(selector),showModal(title,body,buttons,setup){captureDialog={title,body,buttons};elements.get('#state-record-name').value=body.match(/id="state-record-name"[^>]*value="([^"]*)"/)[1];setup?.();},queueRequest:action=>action(),api:{call:async(action,data)=>{captureCalls.push([action,data]);return {signal_ref:'captured-climate',captured:true};}},persist:async()=>{captureSaves++;captureSnapshot=structuredClone(scopedRemote);return true;},closeModal(){},render(){},toast(){},formError(message){throw new Error(message);},flushDeferredEnvelope(){}};
-vm.createContext(scopedContext);
+vm.createContext(withLocale(scopedContext));
 vm.runInContext(source.slice(source.indexOf('  const modes ='),source.indexOf('  const symbols ='))+'\n'+source.split('\n').find(line=>line.trimStart().startsWith('const entitySlug ='))+'\n'+source.split('\n').find(line=>line.trimStart().startsWith('const savedStateFor ='))+'\n'+['configurationLabel','stateCapturePanel','stateTable','proposedStateEntity','learnState','viewSavedState'].map(extract).join('\n'),scopedContext);
 assert.equal(scopedRemote.savedStates.length,0);const beforeCapture=vm.runInContext('stateCapturePanel(d)',scopedContext);assert.ok(!beforeCapture.includes('Oscilación'));assert.ok(!beforeCapture.includes('state-table'));
 vm.runInContext('learnState(d)',scopedContext);await new Promise(resolve=>setImmediate(resolve));
@@ -245,7 +246,7 @@ assert.deepEqual(controlledStateFields(noPowerRemote),[]);const noAggregateHTML=
 // Official state folders render the current state without rewriting their name,
 // chosen color, configured icon, state identity or learned references.
 const symbolContext={editing:false,esc:String,glyph:name=>'<glyph data-name="'+name+'"></glyph>',dualPowerLinked:()=>false,dualStateIndex:()=>0};
-vm.createContext(symbolContext);
+vm.createContext(withLocale(symbolContext));
 const options=source.slice(source.indexOf('  const modes ='),source.indexOf('  const symbols ='));
 const clampDefinition=source.split('\n').find(line=>line.trimStart().startsWith('const clamp ='));
 const modeDefinition=source.split('\n').find(line=>line.trimStart().startsWith('const currentMode ='));

@@ -24,12 +24,12 @@ async def async_setup(hass, config) -> bool:
 async def async_setup_entry(hass, entry) -> bool:
     data = hass.data.setdefault(DOMAIN, {})
     if "manager" in data:
-        raise ConfigEntryError("Solo se permite una instalación de IR Pro.")
+        raise ConfigEntryError(translation_domain=DOMAIN, translation_key="single_installation")
     manager = IRProManager(hass, entry)
     try:
         await manager.async_load()
     except IRProError as err:
-        raise ConfigEntryError(err.message) from err
+        raise ConfigEntryError(translation_domain=DOMAIN, translation_key=err.translation_key) from err
     entry.runtime_data = manager
     data["manager"] = manager
     panel_registered = False

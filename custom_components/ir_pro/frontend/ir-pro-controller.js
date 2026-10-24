@@ -1,9 +1,10 @@
-import {icon} from './ir-pro-icons.js?v=1.0.2';
-import {importModel,exportModel,reconcileCanonical,independentStateEffect,linkedActionEffect,actionStateField,controlledStateFields,recordStateFields,projectState,scopedStateKey,stateRecordMatches,findSavedState} from './ir-pro-model.js?v=1.0.2';
-import {mountIconPickers} from './ir-pro-pickers.js?v=1.0.2';
-import {createModalScrollLock} from './ir-pro-modal-scroll.js?v=1.0.2';
-import {createControlEditor,controlNeedsState} from './ir-pro-editing.js?v=1.0.2';
-export function mountStudio(root,api,initial,isAdmin,openMenu) {
+import {icon} from './ir-pro-icons.js?v=1.0.3';
+import {importModel,exportModel,reconcileCanonical,independentStateEffect,linkedActionEffect,actionStateField,controlledStateFields,recordStateFields,projectState,scopedStateKey,stateRecordMatches,findSavedState} from './ir-pro-model.js?v=1.0.3';
+import {mountIconPickers} from './ir-pro-pickers.js?v=1.0.3';
+import {createModalScrollLock} from './ir-pro-modal-scroll.js?v=1.0.3';
+import {createControlEditor,controlNeedsState} from './ir-pro-editing.js?v=1.0.3';
+import {createI18n} from './ir-pro-i18n.js?v=1.0.3';
+export function mountStudio(root,api,initial,isAdmin,openMenu,locale=createI18n('es')) {
   const scope=root.getRootNode(),lifecycle=new AbortController();
   let disposed=false,catalog=initial.catalog||[],revision=initial.revision||0,saveQueue=Promise.resolve(true),saveFailed=false,actionError='',signalBusy=false,independentSending=false,operation=0,pendingSaves=0,unsubscribe=null,lastAmbientSnapshot='',deferredEnvelope=null,scrollGeneration=0,inputGeneration=0,lastRenderedRoute='';
 
@@ -17,6 +18,27 @@ export function mountStudio(root,api,initial,isAdmin,openMenu) {
   const $ = (query, scope = root.getRootNode()) => scope.querySelector(query);
   const $$ = (query, scope = root.getRootNode()) => Array.from(scope.querySelectorAll(query));
   const esc = value => String(value ?? '').replace(/[&<>"']/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
+  const t = (source,params={}) => locale.t(source,Object.fromEntries(Object.entries(params).map(([key,value])=>[key,value&&typeof value==='object'&&value.i18n?t(value.i18n,value.params||{}):value])));
+  const binding = (source,params={}) => esc(JSON.stringify([source,params]));
+  // Only explicit UI bindings are translated. User names and entity identifiers
+  // are escaped normally and never participate in language changes.
+  const h = (source,params={}) => '<span data-ir-text="'+binding(source,params)+'">'+esc(t(source,params))+'</span>';
+  const attr = (name,source,params={}) => ' '+name+'="'+esc(t(source,params))+'" data-ir-i18n-'+name+'="'+binding(source,params)+'"';
+  const bindText = (element,source,params={}) => {if(!element)return;element.setAttribute('data-ir-text',JSON.stringify([source,params]));element.textContent=t(source,params);};
+  const numberHTML = (value,options={}) => '<span data-ir-number="'+binding(value,options)+'">'+esc(locale.number(value,options))+'</span>';
+  const errorBinding = (error,fallback) => ({code:error?.code,message:error?.message||'',irProLocalized:error?.irProLocalized,irProLanguage:error?.irProLanguage,fallback});
+  const errorHTML = (error,fallback='No se ha podido completar la operación.') => '<span data-ir-error="'+esc(JSON.stringify(errorBinding(error,fallback)))+'">'+esc(locale.error(error,fallback))+'</span>';
+  const bindError = (element,error,fallback) => {element.removeAttribute('data-ir-text');element.setAttribute('data-ir-error',JSON.stringify(errorBinding(error,fallback)));element.textContent=locale.error(error,fallback);};
+  function languageChanged() {
+    if(disposed)return;
+    const restoreScroll=captureScrollPosition();
+    for(const element of $$('[data-ir-text]')){const [source,params]=JSON.parse(element.getAttribute('data-ir-text'));element.textContent=t(source,params);}
+    for(const name of ['aria-label','title','placeholder'])for(const element of $$('[data-ir-i18n-'+name+']')){const [source,params]=JSON.parse(element.getAttribute('data-ir-i18n-'+name));element.setAttribute(name,t(source,params));}
+    for(const element of $$('[data-ir-number]')){const [value,options]=JSON.parse(element.getAttribute('data-ir-number'));element.textContent=locale.number(value,options);}
+    for(const element of $$('[data-ir-configuration]')){const [state,fields]=JSON.parse(element.getAttribute('data-ir-configuration'));element.textContent=configurationLabel(state,fields);}
+    for(const element of $$('[data-ir-error]')){const error=JSON.parse(element.getAttribute('data-ir-error'));element.textContent=locale.error(error,error.fallback);}
+    lastAmbientSnapshot='';refreshAmbientReadings();restoreScroll();
+  }
   const glyph = name => name==='auto' ? '<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><text x="12" y="19" text-anchor="middle" font-size="21" font-family="Arial,sans-serif">A</text></svg>' : typeof icon === 'function' ? icon(name) : '';
   const uid = () => {
     if(typeof crypto.randomUUID==='function')return crypto.randomUUID();
@@ -28,10 +50,12 @@ export function mountStudio(root,api,initial,isAdmin,openMenu) {
   const modes = [{value:'cool',name:'Frío',icon:'snowflake'},{value:'heat',name:'Calor',icon:'sun'},{value:'dry',name:'Deshumidificar',icon:'droplet'},{value:'fan',name:'Ventilación',icon:'fan'},{value:'auto',name:'Automático',icon:'auto'}];
   const fans = [{value:'auto',name:'Automático'},{value:'low',name:'Velocidad 1'},{value:'medium',name:'Velocidad 2'},{value:'high',name:'Velocidad 3'},{value:'speed_4',name:'Velocidad 4'},{value:'speed_5',name:'Velocidad 5'}];
   const fanChoices = folder => fans.filter((speed,index)=>index===0?folder.fanAuto!==false:index<=clamp(folder.fanSpeedCount,2,5,3));
-  const fanDescription = value => 'Ventilador '+(fans.find(speed=>speed.value===value)?.name||value).toLowerCase().replace(/^velocidad /,'');
+  const fanBinding = value => value==='auto'?['Ventilador automático',{}]:['Ventilador {number}',{number:locale.number(Math.max(0,fans.findIndex(speed=>speed.value===value)))}];
+  const fanDescription = value => t(...fanBinding(value));
   const swingStates = [...Array.from({length:6},(_,i)=>({value:'position_'+(i+1),name:'Posición '+(i+1),icon:'swing-position-'+(i+1)})),{value:'auto',name:'Oscilación',icon:'swing'},{value:'off',name:'Desactivado',icon:'swing-off'}];
   const swingValue = state => state.swing===true?'auto':swingStates.some(option=>option.value===state.swing)?state.swing:'off';
-  const swingDescription = state => 'Oscilación '+(swingValue(state)==='auto'?'automática':swingValue(state)==='off'?'desactivada':'posición '+swingValue(state).split('_')[1]);
+  const swingBinding = state => swingValue(state)==='auto'?['Oscilación automática',{}]:swingValue(state)==='off'?['Oscilación desactivada',{}]:['Oscilación posición {number}',{number:swingValue(state).split('_')[1]}];
+  const swingDescription = state => t(...swingBinding(state));
   const swingChoices = folder => swingStates.filter(option=>option.value==='auto'?folder.swingAuto!==false:option.value==='off'?folder.swingOff!==false:Number(option.value.split('_')[1])<=clamp(folder.swingPositionCount,1,6,6));
   const symbols = [{value:'remote',name:'Mando'},{value:'power',name:'Encender'},{value:'power-off',name:'Apagar'},{value:'plus',name:'Más'},{value:'minus',name:'Menos'},{value:'snowflake',name:'Frío'},{value:'sun',name:'Calor'},{value:'droplet',name:'Deshumidificación'},{value:'fan',name:'Ventilador'},{value:'swing',name:'Oscilación'},{value:'wind',name:'Viento'},{value:'thermometer',name:'Temperatura'},{value:'folder',name:'Carpeta'},{value:'settings',name:'Ajustes'},{value:'moon',name:'Noche'},{value:'light',name:'Luz'},{value:'none',name:'Sin icono'}];
   const deviceIcons = [{value:'air-vent',name:'Aire acondicionado (split)'},{value:'wind',name:'Aire acondicionado'},{value:'tv',name:'Televisor'},{value:'remote',name:'Mando'},{value:'fan',name:'Ventilador'},{value:'light',name:'Iluminación'}];
@@ -49,11 +73,11 @@ export function mountStudio(root,api,initial,isAdmin,openMenu) {
     return folder.group==='swing'?swingChoices(folder):[];
   }
   function independentChoices(control) {
-    if(control.type==='group')return officialGroupChoices(control).map(choice=>({...choice,state_effect:{[control.group]:choice.value}}));
+    if(control.type==='group')return officialGroupChoices(control).map(choice=>({...choice,name:t(...optionBinding(choice)),state_effect:{[control.group]:choice.value}}));
     if(control._existingType==='switch')return [];
     return (control.type==='dual'?control.actions||[]:[control]).flatMap((action,index)=>{
       const effect=linkedActionEffect(action);if(!effect)return [];
-      const intent=action.action==='power_on'?'Encender':action.action==='power_off'?'Apagar':actionOptions.find(item=>item.value===action.action)?.name||action.name;
+      const intent=action.action==='power_on'?t('Encender'):action.action==='power_off'?t('Apagar'):action.name;
       return [{...action,name:['power_on','power_off'].includes(action.action)?intent:action.name,icon:action.action==='power_on'?'power':action.action==='power_off'?'power-off':action.icon,value:action.action.startsWith('set_')?action.value:action.action,action_index:index,state_effect:effect}];
     });
   }
@@ -88,9 +112,10 @@ export function mountStudio(root,api,initial,isAdmin,openMenu) {
   const configurationKey = s => JSON.stringify(s.power?[true,s.mode,['dry','fan'].includes(s.mode)?null:s.temperature,s.fan,swingValue(s)]:[false]);
   const savedStateFor = (d,s=d.state,fields=controlledStateFields(d,s)) => findSavedState(d,s,fields);
   function configurationLabel(s,fields=['power','mode','temperature','fan','swing']) {
-    if(fields.includes('power')&&s.power===false)return 'Apagado';
-    return [fields.includes('power')?'Encendido':'',fields.includes('mode')?(modes.find(v=>v.value===s.mode)?.name||s.mode):'',fields.includes('temperature')&&!(fields.includes('mode')&&['dry','fan'].includes(s.mode))?s.temperature+' °C':'',fields.includes('fan')?fanDescription(s.fan):'',fields.includes('swing')?swingDescription(s):''].filter(Boolean).join(' · ');
+    if(fields.includes('power')&&s.power===false)return t('Apagado');
+    return [fields.includes('power')?t('Encendido'):'',fields.includes('mode')?t(modes.find(v=>v.value===s.mode)?.name||s.mode):'',fields.includes('temperature')&&!(fields.includes('mode')&&['dry','fan'].includes(s.mode))?locale.number(s.temperature)+' °C':'',fields.includes('fan')?fanDescription(s.fan):'',fields.includes('swing')?swingDescription(s):''].filter(Boolean).join(' · ');
   }
+  const configurationHTML = (state,fields) => '<span data-ir-configuration="'+binding(state,fields)+'">'+esc(configurationLabel(state,fields))+'</span>';
   const ambientFor = d => {
     const emitter=emitterFor(d.id),source=catalog.find(item=>item.id===emitter?.sourceId);
     const result={};for(const kind of ['humidity','temperature']){const reading=source?.ambient?.[kind];if(!reading)continue;const live=api.entity?.(reading.entity_id);result[kind]={state:live?.state??reading.state,unit:live?.attributes?.unit_of_measurement??reading.unit,entityId:reading.entity_id};}return result;
@@ -110,13 +135,13 @@ export function mountStudio(root,api,initial,isAdmin,openMenu) {
   function ambientHTML(sensor,kind) {
     const value=ambientScalar(sensor,kind);if(value===null)return '';
     const label=kind==='humidity'?'Humedad':'Ambiente',unit=kind==='humidity'?'%':'°C';
-    const formatted=new Intl.NumberFormat('es-ES',{maximumFractionDigits:1}).format(value)+' '+unit;
-    return '<div class="display-ambient" aria-label="'+(kind==='humidity'?'Humedad':'Temperatura ambiente')+': '+esc(formatted)+'" title="'+esc(sensor.entityId||'')+'"><span class="ambient-label">'+glyph(kind==='humidity'?'droplet':'home')+'<span>'+label+'</span></span><span class="ambient-value">'+esc(formatted)+'</span></div>';
+    const formatted=locale.number(value,{maximumFractionDigits:1})+' '+unit;
+    return '<div class="display-ambient"'+attr('aria-label','{label}: {value}',{label:{i18n:kind==='humidity'?'Humedad':'Temperatura ambiente'},value:formatted})+' title="'+esc(sensor.entityId||'')+'"><span class="ambient-label">'+glyph(kind==='humidity'?'droplet':'home')+'<span>'+h(label)+'</span></span><span class="ambient-value">'+numberHTML(value,{maximumFractionDigits:1})+' '+unit+'</span></div>';
   }
   function dualActions(b,d) {
     const defaults=[
-      {name:'Apagado',icon:'power-off',color:'#ff8b80',showName:true,action:d.type==='stateful'?'power_on':'learned',value:''},
-      {name:'Encendido',icon:'power',color:'#6cd9a2',showName:true,action:d.type==='stateful'?'power_off':'learned',value:''}
+      {name:t('Apagado'),icon:'power-off',color:'#ff8b80',showName:true,action:d.type==='stateful'?'power_on':'learned',value:''},
+      {name:t('Encendido'),icon:'power',color:'#6cd9a2',showName:true,action:d.type==='stateful'?'power_off':'learned',value:''}
     ];
     return defaults.map((fallback,index)=>{
       const side={...fallback,...b.actions?.[index]};
@@ -147,39 +172,39 @@ export function mountStudio(root,api,initial,isAdmin,openMenu) {
       d.rows = [
         {...displayRow(),height:2,width:3,style:'modern',accent:'#ffffff',fields:{temperature:true,mode:true,fan:true,swing:true,power:true}},
         compactRow([
-          {...group('Modo','snowflake','mode'),color:'#f2b636',sendMode:'settings'},
-          {...button('Encendido/apagado','power','power_on','#6cd9a2'),type:'dual',sendMode:'settings',activeSide:0,actions:[
-            {name:'Apagado',icon:'power-off',color:'#ff8b80',showName:true,action:'power_on',value:''},
-            {name:'Encendido',icon:'power',color:'#6cd9a2',showName:true,action:'power_off',value:''}
+          {...group(t("Modo"),'snowflake','mode'),color:'#f2b636',sendMode:'settings'},
+          {...button(t("Encendido/apagado"),'power','power_on','#6cd9a2'),type:'dual',sendMode:'settings',activeSide:0,actions:[
+            {name:t('Apagado'),icon:'power-off',color:'#ff8b80',showName:true,action:'power_on',value:''},
+            {name:t('Encendido'),icon:'power',color:'#6cd9a2',showName:true,action:'power_off',value:''}
           ]},
-          {...group('Ventilador','fan','fan'),color:'#56c4ed',sendMode:'settings',fanSpeedCount:5,fanAuto:true}
+          {...group(t("Ventilador"),'fan','fan'),color:'#56c4ed',sendMode:'settings',fanSpeedCount:5,fanAuto:true}
         ]),
         compactRow([
-          {...button('Bajar','minus','temp_down','#53eeb3'),sendMode:'settings'},
-          {...group('Oscilación','swing','swing'),color:'#c6b5ff',sendMode:'independent',swingPositionCount:6,swingAuto:true,swingOff:true},
-          {...button('Subir','plus','temp_up','#53eeb3'),sendMode:'settings'}
+          {...button(t("Bajar"),'minus','temp_down','#53eeb3'),sendMode:'settings'},
+          {...group(t("Oscilación"),'swing','swing'),color:'#c6b5ff',sendMode:'independent',swingPositionCount:6,swingAuto:true,swingOff:true},
+          {...button(t("Subir"),'plus','temp_up','#53eeb3'),sendMode:'settings'}
         ]),
-        compactRow([button('Luz','light','learned','#fff8ad')],1)
+        compactRow([button(t("Luz"),'light','learned','#fff8ad')],1)
       ];
     } else if (symbol === 'tv') {
-      const power = {...button('Encender/apagar','power','learned','#6cd9a2'),type:'dual',activeSide:0,actions:[
-        {name:'Encender',icon:'power',color:'#6cd9a2',showName:true,action:'learned',value:''},
-        {name:'Apagar',icon:'power-off',color:'#ff8b80',showName:true,action:'learned',value:''}
+      const power = {...button(t("Encender/apagar"),'power','learned','#6cd9a2'),type:'dual',activeSide:0,actions:[
+        {name:t('Encender'),icon:'power',color:'#6cd9a2',showName:true,action:'learned',value:''},
+        {name:t('Apagar'),icon:'power-off',color:'#ff8b80',showName:true,action:'learned',value:''}
       ]};
       const digit = value => button(String(value),'none','learned','#56c4ed');
       d.rows = [
         compactRow([null,power,null],3),
-        compactRow([button('Volumen −','minus','learned','#53eeb3'),button('Silencio','volume-off','learned','#f2b636'),button('Volumen +','plus','learned','#53eeb3')]),
-        compactRow([button('Canal −','chevron-down','learned','#56c4ed'),button('Fuente','tv-input','learned','#c6b5ff'),button('Canal +','chevron-up','learned','#56c4ed')]),
+        compactRow([button(t("Volumen −"),'minus','learned','#53eeb3'),button(t("Silencio"),'volume-off','learned','#f2b636'),button(t("Volumen +"),'plus','learned','#53eeb3')]),
+        compactRow([button(t("Canal −"),'chevron-down','learned','#56c4ed'),button(t("Fuente"),'tv-input','learned','#c6b5ff'),button(t("Canal +"),'chevron-up','learned','#56c4ed')]),
         compactRow([digit(1),digit(2),digit(3)]),
         compactRow([digit(4),digit(5),digit(6)]),
         compactRow([digit(7),digit(8),digit(9)]),
         compactRow([null,digit(0),null],3)
       ];
     } else {
-      const folder = group('Opciones','folder','custom');
-      folder.children = [button('Encender','power','learned','#6cd9a2'),button('Apagar','power-off','learned','#ff8b80')];
-      d.rows = [compactRow([button('Encender','power','learned','#6cd9a2'),button('Apagar','power-off','learned','#ff8b80'),folder])];
+      const folder = group(t("Opciones"),'folder','custom');
+      folder.children = [button(t("Encender"),'power','learned','#6cd9a2'),button(t("Apagar"),'power-off','learned','#ff8b80')];
+      d.rows = [compactRow([button(t("Encender"),'power','learned','#6cd9a2'),button(t("Apagar"),'power-off','learned','#ff8b80'),folder])];
     }
     for(const layoutRow of d.rows)for(const control of layoutRow.cells||[])if(control)ensureIndependentActions(control);
     return d;
@@ -217,7 +242,7 @@ export function mountStudio(root,api,initial,isAdmin,openMenu) {
           b.color=/^#[0-9a-f]{6}$/i.test(b.color) ? b.color : '#56c4ed';
           b.showName=b.showName!==false;
           if(b.type==='switch') {
-            b.actions=d.type==='stateful'&&['power_on','power_off'].includes(b.action)?dualActions({...b,actions:undefined},d):[{name:'Desactivado',icon:b.icon,color:b.color,showName:b.showName,action:'learned'},{name:'Activado',icon:b.icon,color:b.color,showName:b.showName,action:'learned'}];
+            b.actions=d.type==='stateful'&&['power_on','power_off'].includes(b.action)?dualActions({...b,actions:undefined},d):[{name:t('Desactivado'),icon:b.icon,color:b.color,showName:b.showName,action:'learned'},{name:t('Activado'),icon:b.icon,color:b.color,showName:b.showName,action:'learned'}];
             b.activeSide=b.on?1:0;b.type='dual';
           }
           b.type=['group','dual'].includes(b.type) ? b.type : 'button';
@@ -257,9 +282,9 @@ export function mountStudio(root,api,initial,isAdmin,openMenu) {
         return true;
       }catch(error){
         if(disposed)return false;
-        if(recoverInvalid&&error.code==='invalid_model'){formError(error.message||'Revisa la configuración de la función.');return false;}
+        if(recoverInvalid&&error.code==='invalid_model'){formError(error,'Revisa la configuración de la función.');return false;}
         saveFailed=true;model=importModel(confirmedWire,model.selected);editing=false;closeModal();render();
-        toast((error.message||'No se han podido guardar los cambios.')+' Recarga el panel antes de continuar.');
+        toast((locale.error(error)||t('No se han podido guardar los cambios.'))+' '+t('Recarga el panel antes de continuar.'));
         return false;
       }
     }).finally(()=>{pendingSaves--;flushDeferredEnvelope();});return saveQueue;
@@ -319,14 +344,14 @@ export function mountStudio(root,api,initial,isAdmin,openMenu) {
     })));
     return changed;
   }
-  function toast(message) {
+  function toast(message,params={}) {
     const element=$('#toast'); if (!element) return;
-    element.classList.remove('visible','show');element.classList.add('sr-only');element.hidden=false;element.textContent=message;
-    clearTimeout(toastTimer);toastTimer=setTimeout(()=>{element.textContent='';},4000);
+    element.classList.remove('visible','show');element.classList.add('sr-only');element.hidden=false;bindText(element,message,params);
+    clearTimeout(toastTimer);toastTimer=setTimeout(()=>{element.textContent='';element.removeAttribute('data-ir-text');},4000);
   }
   function clearActionError() {if(actionError){actionError='';render();}}
   function handleActionError(error) {
-    actionError=error?.message||'No se ha podido enviar la señal. Comprueba el emisor y vuelve a intentarlo.';render();
+    actionError=errorBinding(error,'No se ha podido enviar la señal. Comprueba el emisor y vuelve a intentarlo.');render();
   }
   function captureScrollPosition(reset=false) {
     const generation=++scrollGeneration,interaction=inputGeneration,positions=[],seen=new Set();
@@ -339,10 +364,11 @@ export function mountStudio(root,api,initial,isAdmin,openMenu) {
     const restore=()=>{if(disposed||generation!==scrollGeneration||interaction!==inputGeneration)return;for(const {element,top,left} of positions)if(element.isConnected!==false){if(element.scrollTop!==top)element.scrollTop=top;if(element.scrollLeft!==left)element.scrollLeft=left;}};
     return ()=>{restore();requestAnimationFrame(restore);};
   }
-  const selectOptions = (items,value) => items.map(item=>'<option value="'+esc(item.value)+'"'+(item.value===value?' selected':'')+'>'+esc(item.name)+'</option>').join('');
+  const optionBinding = item => item.value?.startsWith('position_')&&/^Posición \d+$/.test(item.name)?['Posición {number}',{number:item.value.split('_')[1]}]:[item.name,{}];
+  const selectOptions = (items,value,translate=true) => items.map(item=>{const [source,params]=optionBinding(item);return '<option value="'+esc(item.value)+'"'+(item.value===value?' selected':'')+(translate?' data-ir-text="'+binding(source,params)+'"':'')+'>'+esc(translate?t(source,params):item.name)+'</option>';}).join('');
   const actionSelectOptions = (items,value) => selectOptions(items.slice(0,2),value)+'<hr class="action-separator">'+selectOptions(items.slice(2),value);
-  const field = (label,html) => '<label class="field"><span>'+esc(label)+'</span>'+html+'</label>';
-  const checkField = (key,label,checked) => '<label class="choice small"><input type="checkbox" name="'+esc(key)+'"'+(checked?' checked':'')+'> '+esc(label)+'</label>';
+  const field = (label,html) => '<label class="field"><span>'+h(label)+'</span>'+html+'</label>';
+  const checkField = (key,label,checked) => '<label class="choice small"><input type="checkbox" name="'+esc(key)+'"'+(checked?' checked':'')+'> '+h(label)+'</label>';
   function closeModal() {if (modal.open) modal.close();}
   function openNeutralDialog(dialog) {
     const heading=dialog.querySelector('.modal-head h2')||dialog;heading.tabIndex=-1;heading.setAttribute('autofocus','');dialog.setAttribute('autofocus','');
@@ -352,12 +378,12 @@ export function mountStudio(root,api,initial,isAdmin,openMenu) {
   function showModal(title,body,buttons,setup) {
     if (modal.open) modal.close();
     modalAbort?.abort();modalAbort=new AbortController();
-    $('#modal-title').textContent=title;modalBody.innerHTML=body;modalFoot.innerHTML='';
+    const heading=$('#modal-title');if(typeof title==='object'){heading.removeAttribute('data-ir-text');heading.textContent=title.userText;}else bindText(heading,title);modalBody.innerHTML=body;modalFoot.innerHTML='';
     const modalButtons=buttons || [{label:'Cerrar'}];
     $('#modal-close').hidden=modalButtons.some(config=>config.label==='Cancelar');
     for (const config of modalButtons) {
-      const b=document.createElement('button');b.type='button';b.className='btn '+(config.className||'');b.textContent=config.label;
-      b.addEventListener('click',async()=>{if(config.run){b.disabled=true;try{await config.run();}catch(error){formError(error.message||'No se ha podido completar la operación.');}finally{if(b.isConnected)b.disabled=false;}}else closeModal();},{signal:modalAbort.signal});modalFoot.appendChild(b);
+      const b=document.createElement('button');b.type='button';b.className='btn '+(config.className||'');bindText(b,config.label);
+      b.addEventListener('click',async()=>{if(config.run){b.disabled=true;try{await config.run();}catch(error){formError(error,'No se ha podido completar la operación.');}finally{if(b.isConnected)b.disabled=false;}}else closeModal();},{signal:modalAbort.signal});modalFoot.appendChild(b);
     }
     openNeutralDialog(modal);setup?.();
   }
@@ -390,7 +416,7 @@ export function mountStudio(root,api,initial,isAdmin,openMenu) {
   entityModal.addEventListener('cancel',event=>event.stopPropagation());
   const currentMode = state => modes.find(m=>m.value===state.mode) || modes[0];
   const temperatureAvailable = d => !['dry','fan'].includes(d.state.mode);
-  const stateText = d => configurationLabel(d.state,controlledStateFields(d)).replace(/^Encendido(?: · )?/,'');
+  const stateText = d => configurationLabel(d.state,controlledStateFields(d).filter(field=>field!=='power'));
   function displayAccent(value) {return /^#[0-9a-f]{6}$/i.test(value||'')&&value.toLowerCase()!=='#b9c9b0'?value:'#f4f6f8';}
   function refreshAmbientReadings() {
     if(disposed)return;
@@ -402,20 +428,20 @@ export function mountStudio(root,api,initial,isAdmin,openMenu) {
   }
   function displayHTML(d,r,preview=false) {
     const s=d.state,f=r.fields || {},mode=currentMode(s),hasState=d.type==='stateful',temperature=hasState&&temperatureAvailable(d)?s.temperature:'—';
-    const power=f.power ? '<span class="chip display-power'+(hasState?(s.power?' power-on':' power-off'):'')+'">'+glyph(hasState?(s.power?'power':'power-off'):'info')+(hasState?(s.power?'Encendido':'Apagado'):'Sin datos vinculados')+'</span>' : '';
-    const modePart=f.mode ? '<span class="display-item">'+glyph(hasState?mode.icon:'remote')+'<span>'+esc(hasState?mode.name:'Modo —')+'</span></span>' : '';
-    const fansPart=f.fan ? '<span class="display-item">'+glyph('fan')+'<span>'+esc(hasState?(fans.find(v=>v.value===s.fan)?.name || 'Automático'):'Ventilador —')+'</span></span>' : '';
-    const swing=swingStates.find(option=>option.value===swingValue(s)),swingLabel=hasState?swingDescription(s):'Oscilación —';
-    const swingPart=f.swing&&(!hasState||swing.value!=='off') ? '<span class="display-item" role="img" aria-label="'+esc(swingLabel)+'" title="'+esc(swingLabel)+'">'+glyph(hasState?swing.icon:'swing')+'<span class="display-long">'+esc(swingLabel)+'</span><span class="display-short">'+(hasState?swing.name:'Oscilación —')+'</span></span>' : '';
+    const power=f.power ? '<span class="chip display-power'+(hasState?(s.power?' power-on':' power-off'):'')+'">'+glyph(hasState?(s.power?'power':'power-off'):'info')+h(hasState?(s.power?'Encendido':'Apagado'):'Sin datos vinculados')+'</span>' : '';
+    const modePart=f.mode ? '<span class="display-item">'+glyph(hasState?mode.icon:'remote')+'<span>'+h(hasState?mode.name:'Modo —')+'</span></span>' : '';
+    const fansPart=f.fan ? '<span class="display-item">'+glyph('fan')+'<span>'+h(hasState?(fans.find(v=>v.value===s.fan)?.name || 'Automático'):'Ventilador —')+'</span></span>' : '';
+    const swing=swingStates.find(option=>option.value===swingValue(s)),swingLabel=hasState?swingBinding(s):['Oscilación —',{}];
+    const swingPart=f.swing&&(!hasState||swing.value!=='off') ? '<span class="display-item" role="img"'+attr('aria-label',...swingLabel)+attr('title',...swingLabel)+'>'+glyph(hasState?swing.icon:'swing')+'<span class="display-long">'+h(...swingLabel)+'</span><span class="display-short">'+(hasState?h(...optionBinding(swing)):h('Oscilación —'))+'</span></span>' : '';
     const accent=displayAccent(r.accent);
     const width=clamp(r.width,3,6,3),height=clamp(r.height,2,4,2);
     const canEdit=!preview&&editing;
     const readings=ambientFor(d);
     const humidity=ambientHTML(readings.humidity,'humidity'),ambient=ambientHTML(readings.temperature,'temperature');
     const hasAmbient=!!(humidity||ambient);
-    const target=f.temperature?'<div class="display-main"><span class="display-value">'+esc(temperature)+'</span><span class="display-unit">°C</span></div><div class="preview-label small">'+(hasState?(temperatureAvailable(d)?'Objetivo':'Sin ajuste'):'Objetivo')+'</div>':'';
+    const target=f.temperature?'<div class="display-main"><span class="display-value">'+(temperature==='—'?temperature:numberHTML(temperature))+'</span><span class="display-unit">°C</span></div><div class="preview-label small">'+h(hasState?(temperatureAvailable(d)?'Objetivo':'Sin ajuste'):'Objetivo')+'</div>':'';
     return '<div class="display-shell '+esc(r.style||'lcd')+(s.power?'':' off-state')+(canEdit?' is-editable':'')+'" data-display-device="'+esc(d.id)+'" data-height="'+height+'" data-width="'+width+'" style="--display-accent:'+esc(accent)+';--level:'+height+';--display-width:'+(width*112+(width-1)*12)+'px;--display-height:'+(112+(height-2)*30)+'px">'+
-      (canEdit?'<button type="button" class="display-edit-function" data-edit-display="'+esc(r.id)+'" aria-label="Editar función de pantalla"><span class="button-top">Editar función</span></button>':'')+
+      (canEdit?'<button type="button" class="display-edit-function" data-edit-display="'+esc(r.id)+("\""+attr("aria-label","Editar función de pantalla")+"><span class=\"button-top\">"+h("Editar función")+"</span></button>"):'')+
       '<div class="display-top">'+power+'</div>'+
       '<div class="display-readings'+(hasAmbient?' has-ambient':'')+'"'+(!target&&!hasAmbient?' hidden':'')+'><div class="display-ambient-slot" data-ambient-kind="humidity">'+humidity+'</div><div class="display-target">'+target+'</div><div class="display-ambient-slot" data-ambient-kind="temperature">'+ambient+'</div></div>'+
       '<div class="display-bottom">'+modePart+fansPart+swingPart+'</div></div>';
@@ -432,16 +458,16 @@ export function mountStudio(root,api,initial,isAdmin,openMenu) {
     return visual.icon;
   }
   function buttonHTML(d,b,r,index) {
-    if (!b) return editing ? '<button type="button" class="empty-slot" data-add-slot="'+esc(r.id)+'" data-index="'+index+'" data-drop-row="'+esc(r.id)+'" data-drop-index="'+index+'">'+glyph('plus')+'<span>Añadir elemento</span></button>' : '<div class="empty-slot" style="visibility:hidden" aria-hidden="true"></div>';
+    if (!b) return editing ? '<button type="button" class="empty-slot" data-add-slot="'+esc(r.id)+'" data-index="'+index+'" data-drop-row="'+esc(r.id)+'" data-drop-index="'+index+'">'+glyph('plus')+("<span>"+h("Añadir elemento")+"</span></button>") : '<div class="empty-slot" style="visibility:hidden" aria-hidden="true"></div>';
     const dual=b.type==='dual',visual=dual?dualActions(b,d)[dualStateIndex(d,b)]:b;
     const symbol=buttonSymbol(d,b,visual);
-    const stateTitle=d.type==='stateful'&&b.type==='group'?(b.group==='mode'?'Modo: '+currentMode(d.state).name:b.group==='fan'?fanDescription(d.state.fan):b.group==='swing'?swingDescription(d.state):''):'';
+    const stateTitle=d.type==='stateful'&&b.type==='group'?(b.group==='mode'?['Modo: {mode}',{mode:{i18n:currentMode(d.state).name}}]:b.group==='fan'?fanBinding(d.state.fan):b.group==='swing'?swingBinding(d.state):null):null;
     const unavailable=d.type==='stateful'&&b.sendMode!=='independent'&&['temp_up','temp_down'].includes(visual.action)&&!temperatureAvailable(d);
     const pressed=dualPowerLinked(d,b)?d.state.power:dualStateIndex(d,b)===1;
     const visibleText=visual.name;
     const label=dual?b.name+': '+(visibleText||visual.name||actionOptions.find(action=>action.value===visual.action)?.name||'Acción'):b.name;
-    return '<button type="button" class="remote-button'+(visual.icon==='none'&&/^\d$/.test(visibleText)?' is-number':'')+(b.type==='group'?' is-group':'')+(dual?' is-dual':'')+(dual&&pressed?' is-on':'')+'" style="--button-color:'+esc(visual.color)+(editing?';touch-action:none;user-select:none':'')+'" data-button="'+esc(b.id)+'" data-drop-row="'+esc(r.id)+'" data-drop-index="'+index+'"'+(editing?' draggable="true"':'')+(dual?' aria-pressed="'+pressed+'"':'')+(unavailable&&!editing?' disabled title="Este modo no permite ajustar la temperatura"':'')+' aria-label="'+esc(label)+'"'+(stateTitle?' title="'+esc(stateTitle)+'"':'')+'>'+
-      (editing?'<span class="button-top">'+(b.type==='group'?'Editar carpeta':'Editar función')+'</span>':'')+
+    return '<button type="button" class="remote-button'+(visual.icon==='none'&&/^\d$/.test(visibleText)?' is-number':'')+(b.type==='group'?' is-group':'')+(dual?' is-dual':'')+(dual&&pressed?' is-on':'')+'" style="--button-color:'+esc(visual.color)+(editing?';touch-action:none;user-select:none':'')+'" data-button="'+esc(b.id)+'" data-drop-row="'+esc(r.id)+'" data-drop-index="'+index+'"'+(editing?' draggable="true"':'')+(dual?' aria-pressed="'+pressed+'"':'')+(unavailable&&!editing?' disabled'+attr('title','Este modo no permite ajustar la temperatura'):'')+' aria-label="'+esc(label)+'"'+(stateTitle?attr('title',...stateTitle):'')+'>'+
+      (editing?'<span class="button-top">'+h(b.type==='group'?'Editar carpeta':'Editar función')+'</span>':'')+
       (symbol!=='none'?'<span class="button-symbol">'+glyph(symbol)+'</span>':'')+
       (visual.showName?'<span class="button-label">'+esc(visibleText)+'</span>':'')+
       (b.type==='group'?'<span class="group-indicator" aria-hidden="true">'+glyph('chevron-right')+'</span>':'')+'</button>';
@@ -450,30 +476,30 @@ export function mountStudio(root,api,initial,isAdmin,openMenu) {
     const screen=r.type==='display';
     const width=clamp(r.width,3,6,3),height=clamp(r.height,screen?2:1,4,2);
     const widthControl=screen?
-      '<div class="stepper"><span>Anchura</span><button class="icon-btn" data-width="'+esc(r.id)+'" data-delta="-1" aria-label="Reducir anchura"'+(width<=3?' disabled':'')+'>'+glyph('minus')+'</button><b>'+(width-2)+'</b><button class="icon-btn" data-width="'+esc(r.id)+'" data-delta="1" aria-label="Aumentar anchura"'+(width>=6?' disabled':'')+'>'+glyph('plus')+'</button></div>':
-      '<div class="stepper"><span>Columnas</span><button class="icon-btn" data-columns="'+esc(r.id)+'" data-delta="-1" aria-label="Quitar una columna"'+(r.columns<=1?' disabled':'')+'>'+glyph('minus')+'</button><b>'+r.columns+'</b><button class="icon-btn" data-columns="'+esc(r.id)+'" data-delta="1" aria-label="Añadir una columna"'+(r.columns>=6?' disabled':'')+'>'+glyph('plus')+'</button></div>';
-    return '<div class="row-tools"><span class="row-label">'+(screen?'Pantalla':'Fila '+(index+1))+'</span><div class="steppers">'+widthControl+
-      '<div class="stepper"><span>Altura</span><button class="icon-btn" data-height="'+esc(r.id)+'" data-delta="-1" aria-label="Reducir altura"'+(height<=(screen?2:1)?' disabled':'')+'>'+glyph('minus')+'</button><b>'+(screen?height-1:height)+'</b><button class="icon-btn" data-height="'+esc(r.id)+'" data-delta="1" aria-label="Aumentar altura"'+(height>=4?' disabled':'')+'>'+glyph('plus')+'</button></div><button class="icon-btn" data-delete-row="'+esc(r.id)+'" aria-label="Eliminar fila">'+glyph('trash')+'</button></div></div>';
+      ("<div class=\"stepper\"><span>"+h("Anchura")+"</span><button class=\"icon-btn\" data-width=\"")+esc(r.id)+("\" data-delta=\"-1\""+attr("aria-label","Reducir anchura"))+(width<=3?' disabled':'')+'>'+glyph('minus')+'</button><b>'+(width-2)+'</b><button class="icon-btn" data-width="'+esc(r.id)+("\" data-delta=\"1\""+attr("aria-label","Aumentar anchura"))+(width>=6?' disabled':'')+'>'+glyph('plus')+'</button></div>':
+      ("<div class=\"stepper\"><span>"+h("Columnas")+"</span><button class=\"icon-btn\" data-columns=\"")+esc(r.id)+("\" data-delta=\"-1\""+attr("aria-label","Quitar una columna"))+(r.columns<=1?' disabled':'')+'>'+glyph('minus')+'</button><b>'+r.columns+'</b><button class="icon-btn" data-columns="'+esc(r.id)+("\" data-delta=\"1\""+attr("aria-label","Añadir una columna"))+(r.columns>=6?' disabled':'')+'>'+glyph('plus')+'</button></div>';
+    return '<div class="row-tools"><span class="row-label">'+(screen?h('Pantalla'):h('Fila {number}',{number:index+1}))+'</span><div class="steppers">'+widthControl+
+      ("<div class=\"stepper\"><span>"+h("Altura")+"</span><button class=\"icon-btn\" data-height=\"")+esc(r.id)+("\" data-delta=\"-1\""+attr("aria-label","Reducir altura"))+(height<=(screen?2:1)?' disabled':'')+'>'+glyph('minus')+'</button><b>'+(screen?height-1:height)+'</b><button class="icon-btn" data-height="'+esc(r.id)+("\" data-delta=\"1\""+attr("aria-label","Aumentar altura"))+(height>=4?' disabled':'')+'>'+glyph('plus')+'</button></div><button class="icon-btn" data-delete-row="'+esc(r.id)+("\""+attr("aria-label","Eliminar fila")+">")+glyph('trash')+'</button></div></div>';
   }
   function renderRemote() {
     const d=selected();if(!d){view='home';renderHome();return;}
     const e=emitterFor(d.id);
-    app.innerHTML='<div class="remote-header"><div class="remote-navigation"><button class="btn text" data-home>'+glyph('arrow-left')+'Emisores</button><span class="muted remote-emitter">'+esc(e?.name||'')+'</span></div><div class="page-head remote-head"><div class="identity"><div><h1>'+esc(d.name)+'</h1></div></div><div class="page-actions">'+(editing?'<button class="btn text" data-device-settings>'+glyph('pencil')+'Nombre e icono</button>':'')+'<button class="btn'+(editing?' primary':'')+'" data-edit>'+glyph(editing?'check':'settings')+(editing?'Listo':'Editar mando')+'</button></div></div></div>'+
-      (editing?'<div class="editor-note">'+glyph('move')+'<span>Arrastra los botones para colocarlos. Pulsa un elemento para editarlo.</span></div>':'')+
+    app.innerHTML='<div class="remote-header"><div class="remote-navigation"><button class="btn text" data-home>'+glyph('arrow-left')+(h("Emisores")+"</button><span class=\"muted remote-emitter\">")+esc(e?.name||'')+'</span></div><div class="page-head remote-head"><div class="identity"><div><h1>'+esc(d.name)+'</h1></div></div><div class="page-actions">'+(editing?'<button class="btn text" data-device-settings>'+glyph('pencil')+(h("Nombre e icono")+"</button>"):'')+'<button class="btn'+(editing?' primary':'')+'" data-edit>'+glyph(editing?'check':'settings')+h(editing?'Listo':'Editar mando')+'</button></div></div></div>'+
+      (editing?'<div class="editor-note">'+glyph('move')+("<span>"+h("Arrastra los botones para colocarlos. Pulsa un elemento para editarlo.")+"</span></div>"):'')+
       '<div class="remote-canvas'+(editing?' editing':'')+'">'+d.rows.map((r,index)=>'<section class="layout-row'+(editing?' edit-area':'')+'" data-row="'+esc(r.id)+'" data-height="'+r.height+'" style="--level:'+r.height+'">'+(editing?rowTools(r,index):'')+
       (r.type==='display'?'<div class="display-preview">'+displayHTML(d,r)+'</div>':'<div class="row-grid" style="--cols:'+r.columns+';--level:'+r.height+'">'+r.cells.map((b,i)=>buttonHTML(d,b,r,i)).join('')+'</div>')+'</section>').join('')+
-      (editing?'<div class="row-add-actions"><button class="btn" data-add-row>'+glyph('add-row')+'Añadir fila</button><button class="btn" data-add-element>'+glyph('plus')+'Añadir función</button></div>':'')+'</div>'+(d.type==='stateful'?stateCapturePanel(d):'');
+      (editing?'<div class="row-add-actions"><button class="btn" data-add-row>'+glyph('add-row')+(h("Añadir fila")+"</button><button class=\"btn\" data-add-element>")+glyph('plus')+(h("Añadir función")+"</button></div>"):'')+'</div>'+(d.type==='stateful'?stateCapturePanel(d):'');
   }
   function renderHome() {
-    app.innerHTML='<div class="page-head"><div class="identity"><div><h1>Emisores</h1><p class="muted">Tus mandos infrarrojos</p></div></div><button class="btn primary" data-add-emitter>'+glyph('plus')+'Añadir emisor</button></div><div class="stack">'+model.emitters.map(e=>'<section class="emitter-card"><div class="emitter-header"><div class="emitter-title">'+glyph('radio')+'<div><h2>'+esc(e.name)+'</h2><span class="muted small">'+esc(e.model)+'</span></div></div><div class="device-actions"><button class="btn text" data-add-device="'+esc(e.id)+'">'+glyph('plus')+'Añadir dispositivo</button><button class="icon-btn" data-emitter-menu="'+esc(e.id)+'" aria-label="Opciones de '+esc(e.name)+'">'+glyph('more')+'</button></div></div><div class="device-list">'+(e.devices.length?e.devices.map(d=>'<div class="device-item"><button class="device-open" data-open="'+esc(d.id)+'"><span class="device-icon">'+glyph(d.icon)+'</span><span class="device-info"><strong>'+esc(d.name)+'</strong><span class="muted small">Mando</span></span></button><button class="icon-btn" data-device-menu="'+esc(d.id)+'" aria-label="Opciones de '+esc(d.name)+'">'+glyph('more')+'</button></div>').join(''):'<p class="muted">Añade tu primer dispositivo.</p>')+'</div></section>').join('')+'</div>';
+    app.innerHTML=("<div class=\"page-head\"><div class=\"identity\"><div><h1>"+h("Emisores")+"</h1><p class=\"muted\">"+h("Tus mandos infrarrojos")+"</p></div></div><button class=\"btn primary\" data-add-emitter>")+glyph('plus')+(h("Añadir emisor")+"</button></div><div class=\"stack\">")+model.emitters.map(e=>'<section class="emitter-card"><div class="emitter-header"><div class="emitter-title">'+glyph('radio')+'<div><h2>'+esc(e.name)+'</h2><span class="muted small">'+esc(e.model)+'</span></div></div><div class="device-actions"><button class="btn text" data-add-device="'+esc(e.id)+'">'+glyph('plus')+(h("Añadir dispositivo")+"</button><button class=\"icon-btn\" data-emitter-menu=\"")+esc(e.id)+'"'+attr('aria-label','Opciones de {name}',{name:e.name})+'>'+glyph('more')+'</button></div></div><div class="device-list">'+(e.devices.length?e.devices.map(d=>'<div class="device-item"><button class="device-open" data-open="'+esc(d.id)+'"><span class="device-icon">'+glyph(d.icon)+'</span><span class="device-info"><strong>'+esc(d.name)+("</strong><span class=\"muted small\">"+h("Mando")+"</span></span></button><button class=\"icon-btn\" data-device-menu=\"")+esc(d.id)+'"'+attr('aria-label','Opciones de {name}',{name:d.name})+'>'+glyph('more')+'</button></div>').join(''):("<p class=\"muted\">"+h("Añade tu primer dispositivo.")+"</p>"))+'</div></section>').join('')+'</div>';
   }
   function render() {
     if(view!=='home'&&!selected())view='home';
     const route=view+':'+(view==='remote'?model.selected:'');
     const restoreScroll=captureScrollPosition(lastRenderedRoute!==route);lastRenderedRoute=route;
     ensureModelEntities();if(view==='home')renderHome();else renderRemote();
-    if(saveFailed&&!app.querySelector('[data-save-failure]'))app.insertAdjacentHTML('afterbegin','<div class="warning" role="alert" data-save-failure><span aria-hidden="true">⚠</span><div><strong>No se han guardado los últimos cambios.</strong><p>Se ha recuperado la última configuración confirmada. Recarga el panel para continuar.</p><button type="button" class="btn" data-refresh-panel>Recargar panel</button></div></div>');
-    if(actionError&&!saveFailed)app.insertAdjacentHTML('afterbegin','<p class="action-error" role="alert" data-action-error>'+esc(actionError)+'</p>');
+    if(saveFailed&&!app.querySelector('[data-save-failure]'))app.insertAdjacentHTML('afterbegin',("<div class=\"warning\" role=\"alert\" data-save-failure><span aria-hidden=\"true\">⚠</span><div><strong>"+h("No se han guardado los últimos cambios.")+"</strong><p>"+h("Se ha recuperado la última configuración confirmada. Recarga el panel para continuar.")+"</p><button type=\"button\" class=\"btn\" data-refresh-panel>"+h("Recargar panel")+"</button></div></div>"));
+    if(actionError&&!saveFailed)app.insertAdjacentHTML('afterbegin','<p class="action-error" role="alert" data-action-error>'+errorHTML(actionError,actionError.fallback)+'</p>');
     lastAmbientSnapshot='';refreshAmbientReadings();restoreScroll();queueMicrotask(flushDeferredEnvelope);
   }
   function getButton(d,id) {for(const r of d.rows){const i=r.cells?.findIndex(b=>b?.id===id);if(i>=0)return {row:r,index:i,button:r.cells[i]};}return null;}
@@ -484,16 +510,16 @@ export function mountStudio(root,api,initial,isAdmin,openMenu) {
     record=record||savedStateFor(d);
     const ready=!!record?.signal;
     const status=ready?'Estado aprendido':record?'Sin señal':'Sin aprender';
-    return '<section class="state-capture-panel" aria-labelledby="current-state-title"><div class="state-capture-heading"><h2 id="current-state-title">Estado actual</h2><span class="state-status '+(ready?'available':'missing')+'">'+status+'</span></div><p class="state-summary">'+esc(fields.length?configurationLabel(d.state,fields):'Todos los ajustes se controlan por separado.')+'</p>'+
-      '<div class="state-capture-actions">'+(record?'<button class="btn primary" data-relearn-state="'+esc(record.id)+'">'+glyph('radio')+(ready?'Reaprender señal':'Aprender señal del mando original')+'</button>'+(ready?'<button class="btn danger" data-clear-state-signal="'+esc(record.id)+'">'+glyph('trash')+'Borrar señal</button>':'')+'<button class="btn danger" data-delete-saved-state="'+esc(record.id)+'">'+glyph('trash')+'Eliminar estado y entidad</button>':fields.length?'<button class="btn primary" data-learn-state>'+glyph('radio')+'Aprender estado</button>':'')+
-      '</div>'+(!ready&&fields.length?'<p class="small muted state-capture-hint">'+(record?'La entidad se conserva. Aprende una señal para volver a utilizar este estado.':!fields.includes('power')?'Prepara estos ajustes en el mando original y aprende la señal que los envía.':d.state.power?'Prepara estos mismos ajustes en el mando original y aprende la señal para guardar este estado.':'Aprende la señal de apagar del mando original.')+'</p>':'')+stateTable(d,record)+'</section>';
+    return '<section class="state-capture-panel" aria-labelledby="current-state-title"><div class="state-capture-heading"><h2 id="current-state-title">'+h('Estado actual')+'</h2><span class="state-status '+(ready?'available':'missing')+'">'+h(status)+'</span></div><p class="state-summary">'+(fields.length?configurationHTML(d.state,fields):h('Todos los ajustes se controlan por separado.'))+'</p>'+
+      '<div class="state-capture-actions">'+(record?'<button class="btn primary" data-relearn-state="'+esc(record.id)+'">'+glyph('radio')+h(ready?'Reaprender señal':'Aprender señal del mando original')+'</button>'+(ready?'<button class="btn danger" data-clear-state-signal="'+esc(record.id)+'">'+glyph('trash')+h('Borrar señal')+'</button>':'')+'<button class="btn danger" data-delete-saved-state="'+esc(record.id)+'">'+glyph('trash')+h('Eliminar estado y entidad')+'</button>':fields.length?'<button class="btn primary" data-learn-state>'+glyph('radio')+h('Aprender estado')+'</button>':'')+
+      '</div>'+(!ready&&fields.length?'<p class="small muted state-capture-hint">'+h(record?'La entidad se conserva. Aprende una señal para volver a utilizar este estado.':!fields.includes('power')?'Prepara estos ajustes en el mando original y aprende la señal que los envía.':d.state.power?'Prepara estos mismos ajustes en el mando original y aprende la señal para guardar este estado.':'Aprende la señal de apagar del mando original.')+'</p>':'')+stateTable(d,record)+'</section>';
   }
   function stateTable(d,current) {
     const records=d.savedStates||[];if(!records.length)return '';
-    return '<table class="state-table" aria-label="Estados y entidades"><thead><tr><th scope="col">Estado</th><th scope="col">Entidad</th></tr></thead><tbody>'+records.map(record=>{
+    return ("<table class=\"state-table\""+attr("aria-label","Estados y entidades")+"><thead><tr><th scope=\"col\">"+h("Estado")+"</th><th scope=\"col\">"+h("Entidad")+"</th></tr></thead><tbody>")+records.map(record=>{
       const active=record.id===current?.id,label=record.name||configurationLabel(record.settings,recordStateFields(record));
-      return '<tr'+(active?' class="is-current"':'')+'><td><button type="button" class="state-table-select" data-view-saved-state="'+esc(record.id)+'"'+(active?' aria-current="true"':'')+' aria-label="Ver estado '+esc(label)+'">'+esc(label)+'</button></td><td><div class="state-table-entity"><code>'+esc(record.entity)+'</code><button type="button" class="icon-btn state-copy" data-copy-state-entity="'+esc(record.id)+'" aria-label="Copiar entidad '+esc(record.entity)+'" title="Copiar entidad">'+glyph('copy')+'</button></div></td></tr>';
-    }).join('')+'</tbody></table>'+(isAdmin?'<div class="state-capture-actions"><button type="button" class="btn danger" data-delete-all-states>'+glyph('trash')+'Borrar todos los estados</button></div>':'');
+      return '<tr'+(active?' class="is-current"':'')+'><td><button type="button" class="state-table-select" data-view-saved-state="'+esc(record.id)+'"'+(active?' aria-current="true"':'')+attr('aria-label','Ver estado {name}',{name:label})+'>'+esc(label)+'</button></td><td><div class="state-table-entity"><code>'+esc(record.entity)+'</code><button type="button" class="icon-btn state-copy" data-copy-state-entity="'+esc(record.id)+'"'+attr('aria-label','Copiar entidad {entity}',{entity:record.entity})+attr('title','Copiar entidad')+'>'+glyph('copy')+'</button></div></td></tr>';
+    }).join('')+'</tbody></table>'+(isAdmin?'<div class="state-capture-actions"><button type="button" class="btn danger" data-delete-all-states>'+glyph('trash')+(h("Borrar todos los estados")+"</button></div>"):'');
   }
   function proposedStateEntity(d,name,id) {
     const stem='button.'+entitySlug([emitterFor(d.id)?.name,d.name,name].filter(Boolean).join('_'));
@@ -515,10 +541,10 @@ export function mountStudio(root,api,initial,isAdmin,openMenu) {
     const readEntity=()=>existing?existing.entity:proposedStateEntity(d,readName(),recordId);
     showModal(existing?'Reaprender señal del estado':'Aprender estado del mando original',
       field('Nombre del estado','<input id="state-record-name" maxlength="120" value="'+esc(initialName)+'">')+
-      '<div class="state-entity"><span>Entidad'+(existing?'':' que se guardará')+'</span><code id="state-record-entity">'+esc(existing?.entity||proposedStateEntity(d,initialName,recordId))+'</code></div>'+
-      '<p class="small">'+(!fields.includes('power')?'Prepara estos ajustes en el mando original. Apunta al receptor y pulsa la tecla que envía estos ajustes sin cambiar las funciones independientes.':settings.power?'Prepara estos ajustes en el mando original. Con el mando apagado, apunta a '+esc(emitterFor(d.id)?.name||'tu emisor')+' y pulsa Encender para capturar esta configuración completa.':'Apunta el mando original a '+esc(emitterFor(d.id)?.name||'tu emisor')+' y pulsa la tecla de apagar. Solo se guardará el estado Apagado.')+'</p>'+
-      '<div class="state-learn-status listening" id="state-learn-status" role="status" aria-live="polite"><span class="state-learn-symbol">'+glyph('radio')+'</span><strong>Preparado para recibir la señal</strong><span>El estado se guardará al recibirla y pulsar «'+(existing?'Guardar señal':'Guardar estado')+'».</span></div>'+
-      '<button type="button" class="btn" id="retry-state-capture" hidden>Volver a escuchar</button><button type="button" class="btn" id="test-state-capture" hidden>Probar señal</button><p id="form-error" class="warning" role="alert" hidden></p>',
+      '<div class="state-entity"><span>'+h(existing?'Entidad':'Entidad que se guardará')+'</span><code id="state-record-entity">'+esc(existing?.entity||proposedStateEntity(d,initialName,recordId))+'</code></div>'+
+      '<p class="small">'+(!fields.includes('power')?h('Prepara estos ajustes en el mando original. Apunta al receptor y pulsa la tecla que envía estos ajustes sin cambiar las funciones independientes.'):h(settings.power?'Prepara estos ajustes en el mando original. Con el mando apagado, apunta a {emitter} y pulsa Encender para capturar esta configuración completa.':'Apunta el mando original a {emitter} y pulsa la tecla de apagar. Solo se guardará el estado Apagado.',{emitter:emitterFor(d.id)?.name||{i18n:'tu emisor'}}))+'</p>'+
+      '<div class="state-learn-status listening" id="state-learn-status" role="status" aria-live="polite"><span class="state-learn-symbol">'+glyph('radio')+'</span><strong>'+h('Preparado para recibir la señal')+'</strong><span>'+h('El estado se guardará al recibirla y pulsar «{action}».',{action:{i18n:existing?'Guardar señal':'Guardar estado'}})+'</span></div>'+
+      ("<button type=\"button\" class=\"btn\" id=\"retry-state-capture\" hidden>"+h("Volver a escuchar")+"</button><button type=\"button\" class=\"btn\" id=\"test-state-capture\" hidden>"+h("Probar señal")+"</button><p id=\"form-error\" class=\"warning\" role=\"alert\" hidden></p>"),
       [{label:'Cancelar'},{label:existing?'Guardar señal':'Guardar estado',className:'primary',run:async()=>{
         if(!capture){formError('Recibe una señal antes de guardar el estado.');return;}
         const name=readName();if(!name){formError('Escribe un nombre para el estado.');return;}
@@ -542,38 +568,38 @@ export function mountStudio(root,api,initial,isAdmin,openMenu) {
           if(signalBusy)return;signalBusy=true;const token=++operation;
           const status=$('#state-learn-status'),retry=$('#retry-state-capture'),test=$('#test-state-capture');
           retry.hidden=true;test.hidden=true;save.disabled=true;
-          status.classList.remove('available');status.classList.add('listening');status.innerHTML='<span class="state-learn-symbol">'+glyph('radio')+'</span><strong>Escuchando el mando original</strong><span>Apunta al receptor y pulsa '+(!fields.includes('power')?'la tecla correspondiente':settings.power?'Encender':'Apagar')+' en el mando original.</span>';
+          status.classList.remove('available');status.classList.add('listening');status.innerHTML='<span class="state-learn-symbol">'+glyph('radio')+'</span><strong>'+h('Escuchando el mando original')+'</strong><span>'+h('Apunta al receptor y pulsa {key} en el mando original.',{key:{i18n:!fields.includes('power')?'la tecla correspondiente':settings.power?'Encender':'Apagar'}})+'</span>';
           try{
             await saveQueue;if(saveFailed)throw new Error('No se han guardado los cambios del mando.');
             const result=await queueRequest(()=>api.call('learn',{source_id:emitterFor(d.id).sourceId,device_id:d.id,function_key:recordId,signal:'press'}));
             if(disposed||modalSignal.aborted||token!==operation)return;
             if(!result.signal_ref||!(result.learned||result.captured))throw new Error('No se ha confirmado la recepción. Vuelve a intentarlo.');
             capture={kind:'learned',id:result.signal_ref,capturedAt:new Date().toISOString()};
-            status.innerHTML='<span class="state-learn-symbol">'+glyph('check')+'</span><strong>Señal recibida</strong><span>Puedes guardar el estado directamente.</span>';status.classList.remove('listening');status.classList.add('available');test.hidden=false;save.disabled=false;
-          }catch(error){if(!disposed&&!modalSignal.aborted){status.classList.remove('listening');status.innerHTML='<strong>No se ha recibido la señal</strong><span>'+esc(error.message||'Comprueba el receptor y vuelve a intentarlo.')+'</span>';retry.hidden=false;}}
+            status.innerHTML='<span class="state-learn-symbol">'+glyph('check')+("</span><strong>"+h("Señal recibida")+"</strong><span>"+h("Puedes guardar el estado directamente.")+"</span>");status.classList.remove('listening');status.classList.add('available');test.hidden=false;save.disabled=false;
+          }catch(error){if(!disposed&&!modalSignal.aborted){status.classList.remove('listening');status.innerHTML=("<strong>"+h("No se ha recibido la señal")+"</strong><span>")+errorHTML(error,'Comprueba el receptor y vuelve a intentarlo.')+'</span>';retry.hidden=false;}}
           finally{signalBusy=false;flushDeferredEnvelope();}
         };
         $('#retry-state-capture').addEventListener('click',receive,{signal:modalSignal});
-        $('#test-state-capture').addEventListener('click',async()=>{if(!capture)return;try{await queueRequest(()=>api.call('test_signal',{signal_ref:capture.id}));toast('Señal enviada. Comprueba el resultado en el aparato.');}catch(error){formError(error.message||'No se ha podido probar la señal.');}},{signal:modalSignal});
+        $('#test-state-capture').addEventListener('click',async()=>{if(!capture)return;try{await queueRequest(()=>api.call('test_signal',{signal_ref:capture.id}));toast('Señal enviada. Comprueba el resultado en el aparato.');}catch(error){formError(error,'No se ha podido probar la señal.');}},{signal:modalSignal});
         void receive();
       });
   }
   function clearStateSignal(d,id) {
     const record=(d.savedStates||[]).find(item=>item.id===id);if(!record?.signal)return;
-    showModal('Borrar señal aprendida','<p>'+esc(record.name||configurationLabel(record.settings,recordStateFields(record)))+'</p><div class="state-entity"><span>Entidad que se conserva</span><code>'+esc(record.entity)+'</code></div><div class="warning"><span aria-hidden="true">⚠</span><div><strong>Borrado definitivo de la señal.</strong><p>Se conservarán este estado y su entidad. Las automatizaciones que la utilicen dejarán de ejecutar esta función hasta que vuelvas a aprender una señal.</p></div></div>',[
+    showModal('Borrar señal aprendida','<p>'+esc(record.name||configurationLabel(record.settings,recordStateFields(record)))+("</p><div class=\"state-entity\"><span>"+h("Entidad que se conserva")+"</span><code>")+esc(record.entity)+("</code></div><div class=\"warning\"><span aria-hidden=\"true\">⚠</span><div><strong>"+h("Borrado definitivo de la señal.")+"</strong><p>"+h("Se conservarán este estado y su entidad. Las automatizaciones que la utilicen dejarán de ejecutar esta función hasta que vuelvas a aprender una señal.")+"</p></div></div>"),[
       {label:'Cancelar'},{label:'Borrar señal',className:'danger',run:()=>{record.signal=null;record.signal_refs={};persist();closeModal();render();toast('Señal borrada. El estado y la entidad se conservan.');}}
     ]);
   }
   function deleteSavedState(d,id) {
     const record=(d.savedStates||[]).find(item=>item.id===id);if(!record)return;
-    showModal('Eliminar estado y entidad','<p>'+esc(record.name||configurationLabel(record.settings,recordStateFields(record)))+'</p><div class="state-entity"><span>Entidad</span><code>'+esc(record.entity)+'</code></div><div class="warning"><span aria-hidden="true">⚠</span><div><strong>Eliminación definitiva.</strong><p>Se eliminarán este estado, su señal aprendida y su entidad. Las automatizaciones, scripts y paneles que utilicen esta entidad dejarán de ejecutar esta función. Esta acción no se puede deshacer.</p></div></div>',[
+    showModal('Eliminar estado y entidad','<p>'+esc(record.name||configurationLabel(record.settings,recordStateFields(record)))+("</p><div class=\"state-entity\"><span>"+h("Entidad")+"</span><code>")+esc(record.entity)+("</code></div><div class=\"warning\"><span aria-hidden=\"true\">⚠</span><div><strong>"+h("Eliminación definitiva.")+"</strong><p>"+h("Se eliminarán este estado, su señal aprendida y su entidad. Las automatizaciones, scripts y paneles que utilicen esta entidad dejarán de ejecutar esta función. Esta acción no se puede deshacer.")+"</p></div></div>"),[
       {label:'Cancelar'},{label:'Eliminar estado y entidad',className:'danger',run:()=>{d.savedStates=d.savedStates.filter(item=>item.id!==id);persist();closeModal();render();toast('Estado y entidad eliminados de IR Pro.');}}
     ]);
   }
   function deleteAllSavedStates(d) {
     if(!isAdmin||saveFailed||!(d.savedStates||[]).length)return;
     if(signalBusy||independentSending){toast('Espera a que termine la operación en curso.');return;}
-    showModal('Borrar todos los estados','<p>'+esc(d.name)+'</p><div class="warning" role="alert"><span aria-hidden="true">⚠</span><div><strong>Eliminación definitiva.</strong><p>Se eliminarán todos los estados guardados de este mando, sus señales aprendidas y sus entidades. Las automatizaciones, scripts y paneles que utilicen estas entidades dejarán de ejecutar estas funciones. Esta acción no se puede deshacer.</p></div></div><p id="form-error" class="warning" role="alert" hidden></p>',[
+    showModal('Borrar todos los estados','<p>'+esc(d.name)+("</p><div class=\"warning\" role=\"alert\"><span aria-hidden=\"true\">⚠</span><div><strong>"+h("Eliminación definitiva.")+"</strong><p>"+h("Se eliminarán todos los estados guardados de este mando, sus señales aprendidas y sus entidades. Las automatizaciones, scripts y paneles que utilicen estas entidades dejarán de ejecutar estas funciones. Esta acción no se puede deshacer.")+"</p></div></div><p id=\"form-error\" class=\"warning\" role=\"alert\" hidden></p>"),[
       {label:'Cancelar'},{label:'Eliminar estados',className:'danger',run:async()=>{
         try{
           const result=await queueRequest(()=>api.call('delete_saved_states',{device_id:d.id,expected_revision:revision}));
@@ -582,7 +608,7 @@ export function mountStudio(root,api,initial,isAdmin,openMenu) {
           revision=result.revision;catalog=result.catalog||catalog;confirmedWire=copy(result.model);
           model=importModel(result.model,model.selected);model.emitters.forEach(emitter=>emitter.devices.forEach(validateDevice));
           viewedSavedStateId=null;closeModal();render();toast('Estados y entidades eliminados.');
-        }catch(error){if(!disposed)formError(error.message||'No se han podido eliminar los estados.');}
+        }catch(error){if(!disposed)formError(error,'No se han podido eliminar los estados.');}
       }}
     ]);
   }
@@ -624,7 +650,7 @@ export function mountStudio(root,api,initial,isAdmin,openMenu) {
       const result=await api.call('send_state',{device_id:d.id,state,controlled_fields:fields});
       if(disposed)return false;
       adoptCommandEnvelope(result,d,sourceId);render();
-      toast('Señal enviada · '+message+' · Estado estimado');return true;
+      toast(t('Señal enviada')+' · '+message+' · '+t('Estado estimado'));return true;
     });}finally{if(locked)independentSending=false;}
   }
   async function execute(d,b) {
@@ -641,7 +667,7 @@ export function mountStudio(root,api,initial,isAdmin,openMenu) {
       const result=await api.call('press',{function_key:key});
       if(disposed)return false;
       adoptCommandEnvelope(result,d,sourceId);
-      render();toast('Señal enviada · '+name+' · Estado estimado');return true;
+      render();toast(t('Señal enviada')+' · '+name+' · '+t('Estado estimado'));return true;
     });}finally{independentSending=false;}
   }
   async function executeLearnedSide(d,b) {
@@ -651,7 +677,7 @@ export function mountStudio(root,api,initial,isAdmin,openMenu) {
     try{return await queuePhysical(async()=>{
       const result=await api.call('press',{function_key:key});
       if(disposed)return false;
-      adoptCommandEnvelope(result,d,sourceId);render();toast('Señal enviada · '+b.name);return true;
+      adoptCommandEnvelope(result,d,sourceId);render();toast(t('Señal enviada')+' · '+b.name);return true;
     });}finally{independentSending=false;}
   }
   async function sendCurrentState(d) {
@@ -699,59 +725,65 @@ export function mountStudio(root,api,initial,isAdmin,openMenu) {
     }
     if (b.action==='learned') {
       if(independentStateEffect(b))return executeIndependent(d,b);
-      return queuePhysical(async()=>{if(!b.id)throw new Error('Esta función no tiene una señal aprendida.');await api.call('press',{function_key:b.id});if(!disposed)toast('Señal enviada · '+b.name);return true;});
+      return queuePhysical(async()=>{if(!b.id)throw new Error('Esta función no tiene una señal aprendida.');await api.call('press',{function_key:b.id});if(!disposed)toast(t('Señal enviada')+' · '+b.name);return true;});
     }
     if(b.action==='send_state')return sendCurrentState(d);
     const s=d.state,fields=controlledStateFields(d,{...d.state,power:true}),field=actionStateField(b),separate=field&&!fields.includes(field);
-    const separateHint=' · Este ajuste se controla por separado. Configura su señal independiente o vuelve sus controles a Ajustes del mando.';let label='Ajustes actualizados';
-    if (b.action==='power_on') {s.power=true;return commitState(d,'Encendido · '+stateText(d)+(separate?separateHint:''),!separate);}
-    if (b.action==='power_off') {s.power=false;return commitState(d,'Apagado'+(separate?separateHint:''),!separate);}
+    const separateHint=' · '+t('Este ajuste se controla por separado. Configura su señal independiente o vuelve sus controles a Ajustes del mando.');let label=t('Ajustes actualizados');
+    if (b.action==='power_on') {s.power=true;return commitState(d,t('Encendido')+' · '+stateText(d)+(separate?separateHint:''),!separate);}
+    if (b.action==='power_off') {s.power=false;return commitState(d,t('Apagado')+(separate?separateHint:''),!separate);}
     if (b.action==='temp_up'||b.action==='temp_down') {
       if (!temperatureAvailable(d)) {toast('Este modo no permite ajustar la temperatura.');return false;}
       const next=clamp(s.temperature+(b.action==='temp_up'?1:-1),18,30,24);
-      if(next===s.temperature){toast('Límite de temperatura: '+s.temperature+' °C.');return false;}s.temperature=next;label='Temperatura '+s.temperature+' °C';
-    } else if(b.action==='set_mode' && modes.some(v=>v.value===b.value)){s.mode=b.value;label='Modo '+currentMode(s).name.toLowerCase();}
+      if(next===s.temperature){toast('Límite de temperatura: {temperature} °C.',{temperature:locale.number(s.temperature)});return false;}s.temperature=next;label=t('Temperatura {temperature} °C',{temperature:locale.number(s.temperature)});
+    } else if(b.action==='set_mode' && modes.some(v=>v.value===b.value)){s.mode=b.value;label=t('Modo {mode}',{mode:t(currentMode(s).name).toLocaleLowerCase(locale.language)});}
     else if(b.action==='set_fan' && fans.some(v=>v.value===b.value)){s.fan=b.value;label=fanDescription(s.fan);}
     else if(b.action==='set_swing'&&swingStates.some(option=>option.value===b.value)){s.swing=b.value;label=swingDescription(s);}
     else if(b.action==='swing'){s.swing=swingValue(s)==='auto'?'off':'auto';label=swingDescription(s);}
     else {toast('Esta función todavía no tiene una acción asignada.');return false;}
-    return commitState(d,label+(separate?separateHint:!s.power&&fields.includes('power')?' · Preparado para el próximo encendido':''),!separate&&(s.power||!fields.includes('power')));
+    return commitState(d,label+(separate?separateHint:!s.power&&fields.includes('power')?' · '+t('Preparado para el próximo encendido'):''),!separate&&(s.power||!fields.includes('power')));
   }
   function openGroup(d,b) {
     let choices=[];
     const independent=d.type==='stateful'&&b.sendMode==='independent'&&['mode','fan','swing'].includes(b.group);
     if(independent)choices=officialGroupChoices(b).map(choice=>{
       const node=independentActionFor(b,choice.value),ready=node?.signals?.press===true&&!!node.signal_refs?.press;
-      return {...choice,...node,icon:choice.icon,action:'learned',selected:(b.group==='swing'?swingValue(d.state):d.state[b.group])===choice.value,unlearned:!ready};
+      return {...choice,...node,uiLabel:choice.name,icon:choice.icon,action:'learned',selected:(b.group==='swing'?swingValue(d.state):d.state[b.group])===choice.value,unlearned:!ready};
     });
     else if(b.group==='mode') choices=modes.map(v=>({...v,action:'set_mode',selected:d.state.mode===v.value}));
     else if(b.group==='fan') choices=fanChoices(b).map(v=>({...v,icon:v.value==='auto'?'auto':'fan-speed-'+clamp(b.fanSpeedCount,2,5,3)+'-'+fans.indexOf(v),action:'set_fan',selected:d.state.fan===v.value}));
     else if(b.group==='swing') choices=swingChoices(b).map(option=>({...option,action:'set_swing',selected:swingValue(d.state)===option.value}));
     else choices=(b.children || []).map(child=>typeof child==='string'?({value:'',action:child,name:actionOptions.find(v=>v.value===child)?.name || 'Función',icon:({power_on:'power',power_off:'power-off',temp_up:'plus',temp_down:'minus',swing:'swing'})[child] || 'remote'}):child);
     if(!choices.length){toast('Edita esta carpeta para añadir sus botones.');return;}
-    showModal(b.name,'<div class="modal-options">'+choices.map((v,i)=>'<button class="option'+(v.selected?' selected':'')+'" data-group-option="'+i+'" aria-label="'+esc(v.name)+(v.unlearned?' · Sin señal':'')+'"'+(typeof v.selected==='boolean'?' aria-pressed="'+v.selected+'"':'')+(v.unlearned?' disabled':'')+'>'+(v.icon==='none'?'':glyph(v.icon || 'fan'))+(v.showName!==false?'<span>'+esc(v.name)+'</span>':'')+(v.unlearned?'<small>Sin señal</small>':'')+'</button>').join('')+'</div>',[{label:'Cancelar'}],()=>{
+    const official=['mode','fan','swing'].includes(b.group);
+    showModal({userText:b.name},'<div class="modal-options">'+choices.map((v,i)=>{
+      const label=official?optionBinding({...v,name:v.uiLabel||v.name}):null;
+      const aria={label:label?{i18n:label[0],params:label[1]}:v.name};
+      return '<button class="option'+(v.selected?' selected':'')+'" data-group-option="'+i+'"'+attr('aria-label',v.unlearned?'{label} · Sin señal':'{label}',aria)+(typeof v.selected==='boolean'?' aria-pressed="'+v.selected+'"':'')+(v.unlearned?' disabled':'')+'>'+(v.icon==='none'?'':glyph(v.icon || 'fan'))+(v.showName!==false?'<span>'+(label?h(...label):esc(v.name))+'</span>':'')+(v.unlearned?'<small>'+h('Sin señal')+'</small>':'')+'</button>';
+    }).join('')+'</div>',[{label:'Cancelar'}],()=>{
       $$('[data-group-option]',modalBody).forEach(element=>element.addEventListener('click',()=>{const choice=choices[Number(element.dataset.groupOption)];closeModal();execute(d,{...choice,type:'button',name:choice.name});},{signal:modalAbort.signal}));
     });
   }
   function newDevice(emitterId) {
     const e=model.emitters.find(v=>v.id===emitterId);if(!e)return;
-    const hint=()=>{const value=$('#new-device-icon').value;$('#template-description').textContent=['air-vent','wind'].includes(value)?'Incluye pantalla, modos, temperatura, ventilador, oscilación y luz. Podrás editar todos los controles.':value==='tv'?'Incluye encendido y apagado, volumen, canales, fuente y teclado numérico. Podrás editar todos los controles.':'Incluye controles editables para aprender las señales de tu mando.';};
-    showModal('Añadir dispositivo',field('Nombre del dispositivo','<input id="new-device-name" maxlength="70" placeholder="Por ejemplo, Televisor salón">')+field('Icono','<select id="new-device-icon">'+selectOptions(deviceIcons,'air-vent')+'</select>')+'<p id="template-description" class="small muted"></p><p class="small muted">'+esc(e.name)+'</p><p id="form-error" class="warning" hidden></p>',[{label:'Cancelar'},{label:'Crear',className:'primary',run:()=>{
+    const hint=()=>{const value=$('#new-device-icon').value;bindText($('#template-description'),['air-vent','wind'].includes(value)?'Incluye pantalla, modos, temperatura, ventilador, oscilación y luz. Podrás editar todos los controles.':value==='tv'?'Incluye encendido y apagado, volumen, canales, fuente y teclado numérico. Podrás editar todos los controles.':'Incluye controles editables para aprender las señales de tu mando.');};
+    showModal('Añadir dispositivo',field('Nombre del dispositivo',("<input id=\"new-device-name\" maxlength=\"70\""+attr("placeholder","Por ejemplo, Televisor salón")+">"))+field('Icono','<select id="new-device-icon">'+selectOptions(deviceIcons,'air-vent')+'</select>')+'<p id="template-description" class="small muted"></p><p class="small muted">'+esc(e.name)+'</p><p id="form-error" class="warning" hidden></p>',[{label:'Cancelar'},{label:'Crear',className:'primary',run:()=>{
       const name=$('#new-device-name').value.trim();if(!name){formError('Escribe un nombre para el dispositivo.');return;}
       const d=newRemote(name,$('#new-device-icon').value);e.devices.push(d);model.selected=d.id;view='remote';editing=false;persist();closeModal();render();toast('Dispositivo creado en IR Pro.');
     }}],()=>{hint();$('#new-device-icon').addEventListener('change',hint,{signal:modalAbort.signal});});
   }
 
-  function formError(message) {const element=$('#form-error');if(element){element.textContent=message;element.hidden=false;}}
+  function formError(message,params={}) {const element=$('#form-error');if(element){if(message&&typeof message==='object')bindError(element,message,typeof params==='string'?params:'No se ha podido completar la operación.');else{element.removeAttribute('data-ir-error');bindText(element,message,params);}element.hidden=false;}}
   function renameDevice(d) {
     showModal('Nombre e icono',field('Nombre del dispositivo','<input id="rename-device" maxlength="70" value="'+esc(d.name)+'">')+field('Icono','<select id="rename-device-icon">'+selectOptions(deviceIcons,d.icon)+'</select>')+'<p id="form-error" class="warning" hidden></p>',[{label:'Cancelar'},{label:'Guardar',className:'primary',run:()=>{const name=$('#rename-device').value.trim();if(!name){formError('Escribe un nombre.');return;}d.name=name;d.icon=$('#rename-device-icon').value;persist();closeModal();render();toast('Nombre e icono actualizados.');}}]);
   }
   function confirmDelete(title,message,run) {
-    showModal(title,'<div class="warning"><span aria-hidden="true">⚠</span><div><strong>Eliminación definitiva.</strong><p>'+esc(message)+' Las automatizaciones, scripts y paneles que utilicen las entidades eliminadas dejarán de ejecutar estas funciones. Esta acción no se puede deshacer.</p></div></div>',[{label:'Cancelar'},{label:'Eliminar',className:'danger',run:async()=>{run();if(await persist()){closeModal();render();toast('Eliminado de IR Pro.');}}}]);
+    const description=typeof message==='object'?h(message.source,message.params):h(message);
+    showModal(title,'<div class="warning"><span aria-hidden="true">⚠</span><div><strong>'+h('Eliminación definitiva.')+'</strong><p>'+description+' '+h('Las automatizaciones, scripts y paneles que utilicen las entidades eliminadas dejarán de ejecutar estas funciones. Esta acción no se puede deshacer.')+'</p></div></div>',[{label:'Cancelar'},{label:'Eliminar',className:'danger',run:async()=>{run();if(await persist()){closeModal();render();toast('Eliminado de IR Pro.');}}}]);
   }
   function duplicateDevice(d) {
     const source=emitterFor(d.id);
-    showModal('Duplicar dispositivo',field('Nombre del nuevo dispositivo','<input id="duplicate-name" maxlength="70" value="'+esc(d.name+' copia')+'">')+field('Emisor de destino','<select id="duplicate-emitter">'+selectOptions(model.emitters.map(emitter=>({value:emitter.id,name:emitter.name})),source.id)+'</select>')+'<p class="small muted">Se crearán entidades nuevas. El original conservará sus identificadores y automatizaciones. En otro emisor tendrás que aprender de nuevo las señales.</p><p id="form-error" class="warning" hidden></p>',[{label:'Cancelar'},{label:'Crear duplicado',className:'primary',run:async()=>{
+    showModal('Duplicar dispositivo',field('Nombre del nuevo dispositivo','<input id="duplicate-name" maxlength="70" value="'+esc(t('{name} copia',{name:d.name}))+'">')+field('Emisor de destino','<select id="duplicate-emitter">'+selectOptions(model.emitters.map(emitter=>({value:emitter.id,name:emitter.name})),source.id,false)+'</select>')+("<p class=\"small muted\">"+h("Se crearán entidades nuevas. El original conservará sus identificadores y automatizaciones. En otro emisor tendrás que aprender de nuevo las señales.")+"</p><p id=\"form-error\" class=\"warning\" hidden></p>"),[{label:'Cancelar'},{label:'Crear duplicado',className:'primary',run:async()=>{
       const name=$('#duplicate-name').value.trim(),destination=model.emitters.find(emitter=>emitter.id===$('#duplicate-emitter').value);if(!name||!destination){formError('Escribe un nombre y selecciona un emisor.');return;}
       const next=copy(d),same=destination.sourceId===source.sourceId;next.id=uid();next.name=name;next._functions=[];
       const rewrite=node=>{if(!node)return;const legacySwitch=node._existingType==='switch';node.id=uid();delete node.entity;delete node._existingType;if(legacySwitch&&next.type==='stateful')node._existingType='switch';node.on=null;node.activeSide=0;if(!same){node.signal_refs={};node.signals={};node.actions?.forEach(side=>delete side.signal);}if(node.type==='group'&&node.group==='custom')(node.children||[]).forEach(rewrite);(node.independentActions||[]).forEach(rewrite);};
@@ -762,16 +794,16 @@ export function mountStudio(root,api,initial,isAdmin,openMenu) {
   }
   function deviceMenu(id) {
     const d=model.emitters.flatMap(e=>e.devices).find(v=>v.id===id);if(!d)return;
-    showModal(d.name,'<div class="modal-options"><button class="option" data-menu-action="edit">'+glyph('settings')+'Editar mando</button><button class="option" data-menu-action="rename">'+glyph('pencil')+'Cambiar nombre e icono</button><button class="option" data-menu-action="duplicate">'+glyph('copy')+'Duplicar dispositivo</button><button class="option" data-menu-action="delete">'+glyph('trash')+'Eliminar dispositivo</button></div>',[{label:'Cerrar'}],()=>{$$('[data-menu-action]',modalBody).forEach(b=>b.addEventListener('click',()=>{closeModal();if(b.dataset.menuAction==='edit'){model.selected=d.id;view='remote';editing=true;persist();render();}else if(b.dataset.menuAction==='rename')renameDevice(d);else if(b.dataset.menuAction==='duplicate')duplicateDevice(d);else confirmDelete('Eliminar dispositivo','Se eliminarán «'+d.name+'» y sus elementos de IR Pro.',()=>{const e=emitterFor(d.id);e.devices=e.devices.filter(v=>v.id!==d.id);if(model.selected===d.id){model.selected=e.devices[0]?.id || '';view='home';editing=false;}});},{signal:modalAbort.signal}));});
+    showModal({userText:d.name},'<div class="modal-options"><button class="option" data-menu-action="edit">'+glyph('settings')+(h("Editar mando")+"</button><button class=\"option\" data-menu-action=\"rename\">")+glyph('pencil')+(h("Cambiar nombre e icono")+"</button><button class=\"option\" data-menu-action=\"duplicate\">")+glyph('copy')+(h("Duplicar dispositivo")+"</button><button class=\"option\" data-menu-action=\"delete\">")+glyph('trash')+(h("Eliminar dispositivo")+"</button></div>"),[{label:'Cerrar'}],()=>{$$('[data-menu-action]',modalBody).forEach(b=>b.addEventListener('click',()=>{closeModal();if(b.dataset.menuAction==='edit'){model.selected=d.id;view='remote';editing=true;persist();render();}else if(b.dataset.menuAction==='rename')renameDevice(d);else if(b.dataset.menuAction==='duplicate')duplicateDevice(d);else confirmDelete('Eliminar dispositivo',{source:'Se eliminarán «{name}» y sus elementos de IR Pro.',params:{name:d.name}},()=>{const e=emitterFor(d.id);e.devices=e.devices.filter(v=>v.id!==d.id);if(model.selected===d.id){model.selected=e.devices[0]?.id || '';view='home';editing=false;}});},{signal:modalAbort.signal}));});
   }
   function emitterMenu(id) {
     const e=model.emitters.find(v=>v.id===id);if(!e)return;
-    showModal(e.name,'<div class="modal-options"><button class="option" data-emitter-action="rename">'+glyph('pencil')+'Cambiar nombre</button><button class="option" data-emitter-action="delete">'+glyph('trash')+'Eliminar emisor</button></div>',[{label:'Cerrar'}],()=>{$$('[data-emitter-action]',modalBody).forEach(b=>b.addEventListener('click',()=>{closeModal();if(b.dataset.emitterAction==='rename')showModal('Cambiar nombre del emisor',field('Nombre del emisor','<input id="emitter-name" maxlength="70" value="'+esc(e.name)+'">')+'<p id="form-error" class="warning" hidden></p>',[{label:'Cancelar'},{label:'Guardar',className:'primary',run:()=>{const value=$('#emitter-name').value.trim();if(!value){formError('Escribe un nombre.');return;}e.name=value;persist();closeModal();render();}}]);else confirmDelete('Eliminar emisor','Se eliminarán «'+e.name+'» y todos sus mandos de IR Pro.',()=>{model.emitters=model.emitters.filter(v=>v.id!==e.id);view='home';editing=false;});},{signal:modalAbort.signal}));});
+    showModal({userText:e.name},'<div class="modal-options"><button class="option" data-emitter-action="rename">'+glyph('pencil')+(h("Cambiar nombre")+"</button><button class=\"option\" data-emitter-action=\"delete\">")+glyph('trash')+(h("Eliminar emisor")+"</button></div>"),[{label:'Cerrar'}],()=>{$$('[data-emitter-action]',modalBody).forEach(b=>b.addEventListener('click',()=>{closeModal();if(b.dataset.emitterAction==='rename')showModal('Cambiar nombre del emisor',field('Nombre del emisor','<input id="emitter-name" maxlength="70" value="'+esc(e.name)+'">')+'<p id="form-error" class="warning" hidden></p>',[{label:'Cancelar'},{label:'Guardar',className:'primary',run:()=>{const value=$('#emitter-name').value.trim();if(!value){formError('Escribe un nombre.');return;}e.name=value;persist();closeModal();render();}}]);else confirmDelete('Eliminar emisor',{source:'Se eliminarán «{name}» y todos sus mandos de IR Pro.',params:{name:e.name}},()=>{model.emitters=model.emitters.filter(v=>v.id!==e.id);view='home';editing=false;});},{signal:modalAbort.signal}));});
   }
   function addEmitter() {
     const sources=catalog.filter(source=>!model.emitters.some(emitter=>emitter.sourceId===source.id));
     let chosen=sources.find(source=>source.available&&source.canLearn)?.id||'';
-    showModal('Añadir emisor','<div class="stack">'+(sources.length?sources.map(source=>'<button type="button" class="choice'+(source.id===chosen?' selected':'')+'" data-source="'+esc(source.id)+'"'+(!source.available||!source.canLearn?' disabled':'')+'>'+glyph('radio')+'<strong>'+esc(source.name)+'</strong><span>'+esc(source.model||'Broadlink')+'</span><small>'+esc(source.entity_id)+(source.available?'':' · No disponible')+'</small></button>').join(''):'<p class="muted">No hay emisores disponibles para añadir. Configura un receptor compatible en la integración Broadlink de Home Assistant.</p>')+'</div>',[{label:'Cancelar'},{label:'Siguiente',className:'primary',run:()=>{
+    showModal('Añadir emisor','<div class="stack">'+(sources.length?sources.map(source=>'<button type="button" class="choice'+(source.id===chosen?' selected':'')+'" data-source="'+esc(source.id)+'"'+(!source.available||!source.canLearn?' disabled':'')+'>'+glyph('radio')+'<strong>'+esc(source.name)+'</strong><span>'+esc(source.model||'Broadlink')+'</span><small>'+esc(source.entity_id)+(source.available?'':' · '+h('No disponible'))+'</small></button>').join(''):("<p class=\"muted\">"+h("No hay emisores disponibles para añadir. Configura un receptor compatible en la integración Broadlink de Home Assistant.")+"</p>"))+'</div>',[{label:'Cancelar'},{label:'Siguiente',className:'primary',run:()=>{
       const source=sources.find(item=>item.id===chosen);if(!source){toast('Selecciona un emisor disponible.');return;}
       showModal('Personalizar emisor',field('Nombre del emisor','<input id="emitter-name" maxlength="70" value="'+esc(source.name)+'">')+'<p class="muted small">'+esc(source.model||'Broadlink')+' · '+esc(source.entity_id)+'</p><p id="form-error" class="warning" hidden></p>',[{label:'Cancelar'},{label:'Añadir emisor',className:'primary',run:async()=>{const name=$('#emitter-name').value.trim();if(!name){formError('Escribe un nombre.');return;}model.emitters.push({id:uid(),sourceId:source.id,name,model:source.model||'Broadlink',devices:[]});if(await persist()){closeModal();render();}}}]);
     }}],()=>{$$('[data-source]',modalBody).forEach(button=>button.addEventListener('click',()=>{chosen=button.dataset.source;$$('[data-source]',modalBody).forEach(item=>item.classList.toggle('selected',item===button));},{signal:modalAbort.signal}));modalFoot.lastElementChild.disabled=!chosen;});
@@ -779,7 +811,7 @@ export function mountStudio(root,api,initial,isAdmin,openMenu) {
   function screenSizeControls(r) {
     return '<div class="display-dimensions">'+[['width','Anchura',3,6,2],['height','Altura',2,4,1]].map(([key,label,min,max,offset])=>{
       const value=clamp(r[key],min,max,min);
-      return '<div class="stepper"><span>'+label+'</span><button type="button" data-screen-dimension="'+key+'" data-delta="-1" aria-label="Reducir '+label.toLowerCase()+'"'+(value===min?' disabled':'')+'>'+glyph('minus')+'</button><b data-screen-size="'+key+'">'+(value-offset)+'</b><button type="button" data-screen-dimension="'+key+'" data-delta="1" aria-label="Aumentar '+label.toLowerCase()+'"'+(value===max?' disabled':'')+'>'+glyph('plus')+'</button></div>';
+      return '<div class="stepper"><span>'+h(label)+'</span><button type="button" data-screen-dimension="'+key+'" data-delta="-1"'+attr('aria-label',key==='width'?'Reducir anchura':'Reducir altura')+(value===min?' disabled':'')+'>'+glyph('minus')+'</button><b data-screen-size="'+key+'">'+(value-offset)+'</b><button type="button" data-screen-dimension="'+key+'" data-delta="1"'+attr('aria-label',key==='width'?'Aumentar anchura':'Aumentar altura')+(value===max?' disabled':'')+'>'+glyph('plus')+'</button></div>';
     }).join('')+'</div>';
   }
   function wireScreenSizeControls(draft,preview) {
@@ -796,7 +828,7 @@ export function mountStudio(root,api,initial,isAdmin,openMenu) {
     draft.accent=displayAccent(draft.accent);
     const fields=[['temperature','Temperatura objetivo'],['mode','Modo'],['fan','Ventilador'],['swing','Oscilación'],['power','Encendido / apagado']];
     const preview=()=>{const target=$('#display-live');if(target)target.innerHTML=displayHTML(d,draft,true);};
-    showModal(isNew?'Añadir función':'Editar función','<div id="display-live" class="display-preview"></div>'+screenSizeControls(draft)+'<div class="form-grid">'+field('Estilo','<select id="display-style"><option value="lcd"'+(draft.style==='lcd'?' selected':'')+'>Pantalla LCD</option><option value="modern"'+(draft.style==='modern'?' selected':'')+'>Home Assistant</option></select>')+field('Color de la pantalla','<input type="color" id="display-color" value="'+esc(draft.accent||'#f4f6f8')+'">')+'</div><div class="field"><span>Información visible</span><div class="display-edit-fields">'+fields.map(([key,label])=>checkField(key,label,draft.fields[key])).join('')+'</div></div><p id="form-error" class="warning" hidden></p>',[{label:'Cancelar'},{label:isNew?'Añadir pantalla':'Guardar cambios',className:'primary',run:()=>{if(!Object.values(draft.fields).some(Boolean)){formError('Selecciona al menos un dato para la pantalla.');return;}if(isNew)d.rows.unshift(copy(draft));else Object.assign(r,copy(draft));persist();closeModal();render();toast('Pantalla actualizada.');}}],()=>{preview();wireScreenSizeControls(draft,preview);$('#display-style').addEventListener('change',event=>{draft.style=event.target.value;preview();},{signal:modalAbort.signal});$('#display-color').addEventListener('input',event=>{draft.accent=event.target.value;preview();},{signal:modalAbort.signal});$$('input[type=checkbox]',modalBody).forEach(input=>input.addEventListener('change',()=>{draft.fields[input.name]=input.checked;preview();},{signal:modalAbort.signal}));});
+    showModal(isNew?'Añadir función':'Editar función','<div id="display-live" class="display-preview"></div>'+screenSizeControls(draft)+'<div class="form-grid">'+field('Estilo','<select id="display-style">'+selectOptions([{value:'lcd',name:'Pantalla LCD'},{value:'modern',name:'Home Assistant'}],draft.style)+'</select>')+field('Color de la pantalla','<input type="color" id="display-color" value="'+esc(draft.accent||'#f4f6f8')+'">')+("</div><div class=\"field\"><span>"+h("Información visible")+"</span><div class=\"display-edit-fields\">")+fields.map(([key,label])=>checkField(key,label,draft.fields[key])).join('')+'</div></div><p id="form-error" class="warning" hidden></p>',[{label:'Cancelar'},{label:isNew?'Añadir pantalla':'Guardar cambios',className:'primary',run:()=>{if(!Object.values(draft.fields).some(Boolean)){formError('Selecciona al menos un dato para la pantalla.');return;}if(isNew)d.rows.unshift(copy(draft));else Object.assign(r,copy(draft));persist();closeModal();render();toast('Pantalla actualizada.');}}],()=>{preview();wireScreenSizeControls(draft,preview);$('#display-style').addEventListener('change',event=>{draft.style=event.target.value;preview();},{signal:modalAbort.signal});$('#display-color').addEventListener('input',event=>{draft.accent=event.target.value;preview();},{signal:modalAbort.signal});$$('input[type=checkbox]',modalBody).forEach(input=>input.addEventListener('change',()=>{draft.fields[input.name]=input.checked;preview();},{signal:modalAbort.signal}));});
   }
   function findEmpty(d) {for(const r of d.rows.filter(v=>v.type==='buttons')){const index=r.cells.indexOf(null);if(index>=0)return {row:r,index};}const r=row([null]);d.rows.push(r);return {row:r,index:0};}
   function chooseElement(d,placement) {
@@ -804,24 +836,24 @@ export function mountStudio(root,api,initial,isAdmin,openMenu) {
   }
   function confirmSignalRemoval(label,run) {
     const dialog=document.createElement('dialog');dialog.className='signal-delete-modal';
-    dialog.innerHTML='<header class="modal-head"><h2>Borrar señal aprendida</h2></header><div class="modal-body"><p>'+esc(label)+'</p><div class="warning"><span aria-hidden="true">⚠</span><div><strong>Borrado definitivo de la señal.</strong><p>La entidad se conserva. Las automatizaciones que la utilicen dejarán de ejecutar esta función hasta que vuelvas a aprender la señal y guardes los cambios.</p></div></div></div><footer class="modal-foot"><button type="button" class="btn" data-cancel>Cancelar</button><button type="button" class="btn danger" data-confirm>Borrar señal</button></footer>';
+    dialog.innerHTML=("<header class=\"modal-head\"><h2>"+h("Borrar señal aprendida")+"</h2></header><div class=\"modal-body\"><p>")+esc(label)+("</p><div class=\"warning\"><span aria-hidden=\"true\">⚠</span><div><strong>"+h("Borrado definitivo de la señal.")+"</strong><p>"+h("La entidad se conserva. Las automatizaciones que la utilicen dejarán de ejecutar esta función hasta que vuelvas a aprender la señal y guardes los cambios.")+"</p></div></div></div><footer class=\"modal-foot\"><button type=\"button\" class=\"btn\" data-cancel>"+h("Cancelar")+"</button><button type=\"button\" class=\"btn danger\" data-confirm>"+h("Borrar señal")+"</button></footer>");
     root.appendChild(dialog);dialog.querySelector('[data-cancel]').onclick=()=>dialog.close();dialog.querySelector('[data-confirm]').onclick=()=>{run();dialog.close();};dialog.addEventListener('close',()=>dialog.remove(),{once:true});openNeutralDialog(dialog);
   }
   function confirmEntityChanges(removed,renamed) {
     if(!removed.length&&!renamed.length)return Promise.resolve(true);
     return new Promise(resolve=>{
       const dialog=document.createElement('dialog');dialog.className='signal-delete-modal';let accepted=false;
-      dialog.innerHTML='<header class="modal-head"><h2>Confirmar cambios de entidades</h2></header><div class="modal-body">'+
-        (removed.length?'<p>Se eliminarán estas entidades al sustituir las funciones:</p><ul>'+removed.map(node=>'<li><code>'+esc(node.entity)+'</code></li>').join('')+'</ul><p>Las nuevas funciones no heredarán las señales aprendidas de las funciones sustituidas.</p>':'')+
-        (renamed.length?'<p>Se cambiarán estos identificadores, conservando sus señales:</p><ul>'+renamed.map(change=>'<li><code>'+esc(change.before)+'</code> → <code>'+esc(change.after)+'</code></li>').join('')+'</ul>':'')+
-        '<div class="warning"><span aria-hidden="true">⚠</span><div><strong>Revisa tus automatizaciones.</strong><p>Las automatizaciones, scripts y paneles que usen los identificadores anteriores tendrán que actualizarse.</p></div></div></div><footer class="modal-foot"><button type="button" class="btn" data-cancel>Cancelar</button><button type="button" class="btn danger" data-confirm>Aplicar cambios</button></footer>';
+      dialog.innerHTML=("<header class=\"modal-head\"><h2>"+h("Confirmar cambios de entidades")+"</h2></header><div class=\"modal-body\">")+
+        (removed.length?("<p>"+h("Se eliminarán estas entidades al sustituir las funciones:")+"</p><ul>")+removed.map(node=>'<li><code>'+esc(node.entity)+'</code></li>').join('')+("</ul><p>"+h("Las nuevas funciones no heredarán las señales aprendidas de las funciones sustituidas.")+"</p>"):'')+
+        (renamed.length?("<p>"+h("Se cambiarán estos identificadores, conservando sus señales:")+"</p><ul>")+renamed.map(change=>'<li><code>'+esc(change.before)+'</code> → <code>'+esc(change.after)+'</code></li>').join('')+'</ul>':'')+
+        ("<div class=\"warning\"><span aria-hidden=\"true\">⚠</span><div><strong>"+h("Revisa tus automatizaciones.")+"</strong><p>"+h("Las automatizaciones, scripts y paneles que usen los identificadores anteriores tendrán que actualizarse.")+"</p></div></div></div><footer class=\"modal-foot\"><button type=\"button\" class=\"btn\" data-cancel>"+h("Cancelar")+"</button><button type=\"button\" class=\"btn danger\" data-confirm>"+h("Aplicar cambios")+"</button></footer>");
       root.appendChild(dialog);dialog.querySelector('[data-cancel]').onclick=()=>dialog.close();dialog.querySelector('[data-confirm]').onclick=()=>{accepted=true;dialog.close();};
       dialog.addEventListener('close',()=>{dialog.remove();resolve(accepted);},{once:true});openNeutralDialog(dialog);
     });
   }
   function editButton(d,original,placement,newType='button') {
     if(signalBusy){toast('Hay un aprendizaje en curso. Espera a que termine antes de editar otra función.');return;}
-    let draft=original?copy(original):(newType==='group'?group('Nueva carpeta','folder',d.type==='stateful'?'mode':'custom'):button('Nueva función','remote','learned'));
+    let draft=original?copy(original):(newType==='group'?group(t("Nueva carpeta"),'folder',d.type==='stateful'?'mode':'custom'):button(t("Nueva función"),'remote','learned'));
     const identities=createControlEditor(original,uid);
     const displayDraft=displayRow();
     const allowedActions=actionOptions.filter(action=>action.value!=='open_group');
@@ -881,7 +913,7 @@ export function mountStudio(root,api,initial,isAdmin,openMenu) {
         b.entity=entity;
       });
     };
-    const entityField=b=>'<section class="entity-field"><span>Entidad</span><div class="entity-value"><code>'+esc(b.entity)+'</code><button type="button" class="icon-btn" data-entity-edit="'+esc(b.id)+'" aria-label="Cambiar nombre de la entidad de '+esc(b.name)+'">'+glyph('pencil')+'</button></div>'+(entityDomain(d,b)==='switch'?'<p class="entity-hint">Acción 1 · '+esc(b.actions?.[0]?.name||'Encender')+': <code>switch.turn_on</code></p><p class="entity-hint">Acción 2 · '+esc(b.actions?.[1]?.name||'Apagar')+': <code>switch.turn_off</code></p><p class="entity-hint">Las dos acciones utilizan esta misma entidad. Cada acción envía su señal una vez.</p>':'<p class="entity-hint">Acción de Home Assistant: <code>button.press</code>.</p>')+'</section>';
+    const entityField=b=>("<section class=\"entity-field\"><span>"+h("Entidad")+"</span><div class=\"entity-value\"><code>")+esc(b.entity)+'</code><button type="button" class="icon-btn" data-entity-edit="'+esc(b.id)+'"'+attr('aria-label','Cambiar nombre de la entidad de {name}',{name:b.name})+'>'+glyph('pencil')+'</button></div>'+(entityDomain(d,b)==='switch'?("<p class=\"entity-hint\">"+h("Acción 1 ·")+" ")+esc(b.actions?.[0]?.name||'Encender')+(": <code>switch.turn_on</code></p><p class=\"entity-hint\">"+h("Acción 2 ·")+" ")+esc(b.actions?.[1]?.name||'Apagar')+(": <code>switch.turn_off</code></p><p class=\"entity-hint\">"+h("Las dos acciones utilizan esta misma entidad. Cada acción envía su señal una vez.")+"</p>"):("<p class=\"entity-hint\">"+h("Acción de Home Assistant:")+" "+"<code>button.press</code>.</p>"))+'</section>';
     const sendModeOptions=[{value:'settings',name:'Ajustes del mando'},{value:'independent',name:'Acción independiente'}];
     const sendModeHint='Si algún control de este ajuste es independiente, el ajuste queda fuera del estado general.';
     const renderEntityFields=()=>{
@@ -890,7 +922,7 @@ export function mountStudio(root,api,initial,isAdmin,openMenu) {
       const sendTarget=$('#function-send-mode');
       if(sendTarget){
         const eligible=['button','dual'].includes(draft.type)&&independentChoices(draft).length;
-        sendTarget.innerHTML=eligible?field('Cómo envía la señal','<select id="control-send-mode">'+selectOptions(sendModeOptions,draft.sendMode==='independent'?'independent':'settings')+'</select>')+'<p class="muted small">'+(draft.type==='dual'?'Se aplica a las acciones que modifican ajustes. ':'')+sendModeHint+'</p>':'';
+        sendTarget.innerHTML=eligible?field('Cómo envía la señal','<select id="control-send-mode">'+selectOptions(sendModeOptions,draft.sendMode==='independent'?'independent':'settings')+'</select>')+'<p class="muted small">'+(draft.type==='dual'?h('Se aplica a las acciones que modifican ajustes.')+' ':'')+h(sendModeHint)+'</p>':'';
         $('#control-send-mode')?.addEventListener('change',event=>{draft.sendMode=event.target.value;renderEntityFields();},{signal:modalAbort.signal});
       }
       syncDraftEntities();
@@ -909,8 +941,8 @@ export function mountStudio(root,api,initial,isAdmin,openMenu) {
         else if(node.sendMode==='independent')independentChoices(node).forEach(choice=>{const action=independentActionFor(node,choice.value,choice.action_index);if(action)visit(action);});
       };visit(draft);
       target.innerHTML=functions.length?'<div class="function-signal-list">'+functions.flatMap(node=>(entityDomain(d,node)==='switch'?['on','off']:['press']).map(signal=>{
-        const ref=node.signals?.[signal]===true?node.signal_refs?.[signal]:null,sideIndex=signal==='on'?0:1,label=signal==='press'?node.name:(node.actions?.[sideIndex]?.name||(signal==='on'?'Encender':'Apagar'))+' · Acción '+(sideIndex+1);
-        return '<section class="function-signal-row" data-signal-row="'+esc(node.id+'|'+signal)+'"><strong>'+esc(label)+'</strong>'+(independentStateEffect(node)||draft.learnedActions?.some(child=>child.id===node.id)?entityField(node):'')+'<div class="function-signal-status '+(ref?'available':'missing')+'">'+(ref?'Señal disponible':'Sin señal')+'</div><div class="function-signal-actions"><button type="button" class="btn" data-learn-function="'+esc(node.id)+'" data-signal="'+signal+'">'+glyph('radio')+(ref?'Reaprender señal':'Aprender del mando original')+'</button>'+(ref?'<button type="button" class="btn" data-test-function="'+esc(node.id)+'" data-signal="'+signal+'">Probar señal</button><button type="button" class="btn danger" data-clear-function="'+esc(node.id)+'" data-signal="'+signal+'">Borrar señal</button>':'')+'</div></section>';
+        const ref=node.signals?.[signal]===true?node.signal_refs?.[signal]:null,sideIndex=signal==='on'?0:1,label=signal==='press'?esc(node.name):(node.actions?.[sideIndex]?.name?esc(node.actions[sideIndex].name):h(signal==='on'?'Encender':'Apagar'))+' · '+h('Acción {number}',{number:sideIndex+1});
+        return '<section class="function-signal-row" data-signal-row="'+esc(node.id+'|'+signal)+'"><strong>'+label+'</strong>'+(independentStateEffect(node)||draft.learnedActions?.some(child=>child.id===node.id)?entityField(node):'')+'<div class="function-signal-status '+(ref?'available':'missing')+'">'+h(ref?'Señal disponible':'Sin señal')+'</div><div class="function-signal-actions"><button type="button" class="btn" data-learn-function="'+esc(node.id)+'" data-signal="'+signal+'">'+glyph('radio')+h(ref?'Reaprender señal':'Aprender del mando original')+'</button>'+(ref?'<button type="button" class="btn" data-test-function="'+esc(node.id)+'" data-signal="'+signal+'">'+h('Probar señal')+'</button><button type="button" class="btn danger" data-clear-function="'+esc(node.id)+'" data-signal="'+signal+'">'+h('Borrar señal')+'</button>':'')+'</div></section>';
       })).join('')+'</div>':'';
       $$('[data-entity-edit]',target).forEach(control=>{control.onclick=()=>openEntityEditor(functions.find(node=>node.id===control.dataset.entityEdit));});
       $$('[data-learn-function]',target).forEach(control=>control.addEventListener('click',async()=>{
@@ -919,23 +951,23 @@ export function mountStudio(root,api,initial,isAdmin,openMenu) {
         signalBusy=true;const modalSignal=modalAbort.signal,token=++operation,save=modalFoot.lastElementChild;
         save.disabled=true;control.disabled=true;
         const status=control.closest('.function-signal-row').querySelector('.function-signal-status');
-        status.className='function-signal-status state-learn-status listening';status.innerHTML='<span class="state-learn-symbol">'+glyph('radio')+'</span><strong>Escuchando el mando original</strong><span>Apunta al receptor y pulsa la tecla de «'+esc(node.name)+'».</span>';
+        status.className='function-signal-status state-learn-status listening';status.removeAttribute('data-ir-error');status.innerHTML='<span class="state-learn-symbol">'+glyph('radio')+'</span><strong>'+h('Escuchando el mando original')+'</strong><span>'+h('Apunta al receptor y pulsa la tecla de «{name}».',{name:node.name})+'</span>';
         try{
           await saveQueue;if(saveFailed)throw new Error('Guarda el dispositivo antes de aprender su señal.');
           const result=await queueRequest(()=>api.call('learn',{source_id:emitterFor(d.id).sourceId,device_id:d.id,function_key:node.id,signal}));
           if(disposed||modalSignal.aborted||token!==operation)return;
           if(!result.signal_ref||!(result.learned||result.captured))throw new Error('No se ha confirmado la recepción de la señal.');
           node.signal_refs={...node.signal_refs,[signal]:result.signal_ref};node.signals={...node.signals,[signal]:true};
-          status.classList.remove('listening');status.classList.add('available');status.innerHTML='<span class="state-learn-symbol">'+glyph('check')+'</span><strong>Señal recibida</strong><span>Guarda los cambios para asociarla. Probarla es opcional.</span>';
-          control.textContent='Reaprender señal';
+          status.classList.remove('listening');status.classList.add('available');status.innerHTML='<span class="state-learn-symbol">'+glyph('check')+("</span><strong>"+h("Señal recibida")+"</strong><span>"+h("Guarda los cambios para asociarla. Probarla es opcional.")+"</span>");
+          bindText(control,'Reaprender señal');
           if(!control.parentElement.querySelector('[data-test-function]')){
-            const test=document.createElement('button');test.type='button';test.className='btn';test.textContent='Probar señal';test.dataset.testFunction=node.id;
-            test.addEventListener('click',async()=>{test.disabled=true;try{await queueRequest(()=>api.call('test_signal',{signal_ref:node.signal_refs[signal]}));toast('Señal enviada. Comprueba el resultado en el aparato.');}catch(error){formError(error.message||'No se ha podido probar la señal.');}finally{test.disabled=false;}},{signal:modalSignal});control.parentElement.appendChild(test);
+            const test=document.createElement('button');test.type='button';test.className='btn';bindText(test,'Probar señal');test.dataset.testFunction=node.id;
+            test.addEventListener('click',async()=>{test.disabled=true;try{await queueRequest(()=>api.call('test_signal',{signal_ref:node.signal_refs[signal]}));toast('Señal enviada. Comprueba el resultado en el aparato.');}catch(error){formError(error,'No se ha podido probar la señal.');}finally{test.disabled=false;}},{signal:modalSignal});control.parentElement.appendChild(test);
           }
-        }catch(error){if(!disposed&&!modalSignal.aborted){status.classList.remove('listening');status.textContent=error.message||'No se ha recibido la señal. Vuelve a intentarlo.';}}
+        }catch(error){if(!disposed&&!modalSignal.aborted){status.classList.remove('listening');bindError(status,error,'No se ha recibido la señal. Vuelve a intentarlo.');}}
         finally{signalBusy=false;if(!disposed&&!modalSignal.aborted){save.disabled=false;control.disabled=false;}flushDeferredEnvelope();}
       },{signal:modalAbort.signal}));
-      $$('[data-test-function]',target).forEach(control=>control.addEventListener('click',async()=>{const node=functions.find(item=>item.id===control.dataset.testFunction),ref=node?.signal_refs?.[control.dataset.signal];if(!ref)return;control.disabled=true;try{await queueRequest(()=>api.call('test_signal',{signal_ref:ref}));toast('Señal enviada. Comprueba el resultado en el aparato.');}catch(error){formError(error.message||'No se ha podido probar la señal.');}finally{control.disabled=false;}},{signal:modalAbort.signal}));
+      $$('[data-test-function]',target).forEach(control=>control.addEventListener('click',async()=>{const node=functions.find(item=>item.id===control.dataset.testFunction),ref=node?.signal_refs?.[control.dataset.signal];if(!ref)return;control.disabled=true;try{await queueRequest(()=>api.call('test_signal',{signal_ref:ref}));toast('Señal enviada. Comprueba el resultado en el aparato.');}catch(error){formError(error,'No se ha podido probar la señal.');}finally{control.disabled=false;}},{signal:modalAbort.signal}));
       $$('[data-clear-function]',target).forEach(control=>control.addEventListener('click',()=>{const node=functions.find(item=>item.id===control.dataset.clearFunction);if(node)confirmSignalRemoval(node.name,()=>{delete node.signal_refs[control.dataset.signal];renderLearningFields();});},{signal:modalAbort.signal}));
     };
     const openEntityEditor=b=>{
@@ -949,7 +981,7 @@ export function mountStudio(root,api,initial,isAdmin,openMenu) {
         const suffix=input.value.trim();let message='';
         if(!/^[a-z0-9_]{1,240}$/.test(suffix))message='Usa minúsculas, números y guiones bajos. El nombre no puede estar vacío.';
         else if(entityTaken(domain+'.'+suffix,b.id,d,draft))message='Esa entidad ya está en uso por otra función. Elige otro nombre.';
-        if(message){error.textContent=message;error.hidden=false;input.setAttribute('aria-invalid','true');input.focus();return;}
+        if(message){bindText(error,message);error.hidden=false;input.setAttribute('aria-invalid','true');input.focus();return;}
         b.entity=domain+'.'+suffix;fixedEntities.add(b.id);entityModal.close();renderEntityFields();
         $('[data-entity-edit="'+CSS.escape(b.id)+'"]',modalBody)?.focus({preventScroll:true});
       };
@@ -963,8 +995,8 @@ export function mountStudio(root,api,initial,isAdmin,openMenu) {
     const preview=()=>{
       const target=$('#button-live');if(!target)return;
       const visual=draft.type==='dual'?draft.actions[previewSide]:draft,symbol=buttonSymbol(d,draft,visual);
-      const card='<button type="button" class="remote-button" style="--button-color:'+esc(visual.color)+';width:112px;height:112px" aria-label="Vista previa">'+(symbol!=='none'?'<span class="button-symbol">'+glyph(symbol)+'</span>':'')+(visual.showName?'<span class="button-label">'+esc(visual.name)+'</span>':'')+'</button>';
-      target.innerHTML=draft.type==='display'?displayHTML(d,displayDraft,true):draft.type==='dual'?'<div class="dual-preview-wrap"><div class="dual-preview-tabs">'+[0,1].map(index=>'<button type="button" class="btn text'+(index===previewSide?' selected':'')+'" data-preview-side="'+index+'" aria-pressed="'+(index===previewSide)+'">Acción '+(index+1)+'</button>').join('')+'</div>'+card+'</div>':card;
+      const card='<button type="button" class="remote-button" style="--button-color:'+esc(visual.color)+(";width:112px;height:112px\""+attr("aria-label","Vista previa")+">")+(symbol!=='none'?'<span class="button-symbol">'+glyph(symbol)+'</span>':'')+(visual.showName?'<span class="button-label">'+esc(visual.name)+'</span>':'')+'</button>';
+      target.innerHTML=draft.type==='display'?displayHTML(d,displayDraft,true):draft.type==='dual'?'<div class="dual-preview-wrap"><div class="dual-preview-tabs">'+[0,1].map(index=>'<button type="button" class="btn text'+(index===previewSide?' selected':'')+'" data-preview-side="'+index+'" aria-pressed="'+(index===previewSide)+'">'+h('Acción {number}',{number:index+1})+'</button>').join('')+'</div>'+card+'</div>':card;
       $$('[data-preview-side]',target).forEach(button=>button.addEventListener('click',()=>{previewSide=Number(button.dataset.previewSide);renderDual();preview();},{signal:modalAbort.signal}));
       renderEntityFields();
     };
@@ -972,7 +1004,7 @@ export function mountStudio(root,api,initial,isAdmin,openMenu) {
       const appearance=$('#button-appearance');
       if(!appearance)return;
       appearance.hidden=['display','dual'].includes(draft.type);
-      $('#button-name',appearance).closest('label').querySelector('span').textContent='Nombre';
+      bindText($('#button-name',appearance).closest('label').querySelector('span'),'Nombre');
       $('.form-grid',appearance).hidden=draft.type==='dual';
       $('input[name="show-name"]',appearance).closest('label').hidden=draft.type==='dual';
     };
@@ -980,13 +1012,13 @@ export function mountStudio(root,api,initial,isAdmin,openMenu) {
       const target=$('#action-fields');
       target.innerHTML='<div class="dual-action-list">'+draft.actions.map((side,index)=>{
         if(index!==previewSide)return '';
-        return '<fieldset class="dual-action-card" aria-labelledby="dual-title-'+index+'"><div class="dual-action-head"><span class="dual-action-number">'+(index+1)+'</span><h3 id="dual-title-'+index+'">Acción '+(index+1)+'</h3></div>'+
+        return '<fieldset class="dual-action-card" aria-labelledby="dual-title-'+index+'"><div class="dual-action-head"><span class="dual-action-number">'+(index+1)+'</span><h3 id="dual-title-'+index+'">'+h('Acción {number}',{number:index+1})+'</h3></div>'+
         field('Nombre','<input data-dual-index="'+index+'" data-dual-field="name" maxlength="40" value="'+esc(side.name)+'">')+
-        '<label class="dual-show-name"><input type="checkbox" data-dual-index="'+index+'" data-dual-field="showName"'+(side.showName?' checked':'')+'>Mostrar texto</label>'+
+        '<label class="dual-show-name"><input type="checkbox" data-dual-index="'+index+'" data-dual-field="showName"'+(side.showName?' checked':'')+(">"+h("Mostrar texto")+"</label>")+
         '<div class="form-grid">'+field('Icono','<select data-dual-index="'+index+'" data-dual-field="icon">'+selectOptions(symbols,side.icon)+'</select>')+field('Color','<input type="color" data-dual-index="'+index+'" data-dual-field="color" value="'+esc(side.color)+'">')+'</div>'+
         field('Acción al pulsar','<select data-dual-index="'+index+'" data-dual-field="action">'+actionSelectOptions(allowedActions,side.action)+'</select>')+
         (actionValueChoices(side.action)?field(actionValueLabel(side.action),'<select data-dual-index="'+index+'" data-dual-field="value">'+selectOptions(actionValueChoices(side.action),side.value||defaultActionValue(side.action))+'</select>'):'')+'</fieldset>';
-      }).join('')+'</div><p class="dual-state-hint muted small">'+(dualPowerLinked(d,draft)?'Comparte el estado de encendido con la pantalla. Otro botón de encender o apagar también actualizará su aspecto.':'Alterna entre las dos acciones al pulsarlo.')+'</p>';
+      }).join('')+'</div><p class="dual-state-hint muted small">'+h(dualPowerLinked(d,draft)?'Comparte el estado de encendido con la pantalla. Otro botón de encender o apagar también actualizará su aspecto.':'Alterna entre las dos acciones al pulsarlo.')+'</p>';
       $$('[data-dual-field]',target).forEach(input=>{
         const key=input.dataset.dualField;
         const eventName=input.tagName==='SELECT'||input.type==='checkbox'?'change':'input';
@@ -1005,7 +1037,7 @@ export function mountStudio(root,api,initial,isAdmin,openMenu) {
       const target=$('#folder-children');if(!target)return;
       prepareDraft();
       const children=draft.children;
-      target.innerHTML=children.map((child,index)=>'<div class="child-config">'+field('Nombre','<input data-child-name="'+index+'" value="'+esc(child.name)+'" maxlength="40">')+'<label class="dual-show-name"><input type="checkbox" data-child-show="'+index+'"'+(child.showName!==false?' checked':'')+'>Mostrar texto</label>'+field('Icono','<select data-child-icon="'+index+'">'+selectOptions(symbols,child.icon)+'</select>')+field('Acción','<select data-child-action="'+index+'">'+actionSelectOptions(allowedActions,child.action)+'</select>')+(actionValueChoices(child.action)?field(actionValueLabel(child.action),'<select data-child-value="'+index+'">'+selectOptions(actionValueChoices(child.action),child.value||defaultActionValue(child.action))+'</select>'):'')+(independentChoices(child).length?field('Cómo envía la señal','<select data-child-send-mode="'+index+'">'+selectOptions(sendModeOptions,child.sendMode==='independent'?'independent':'settings')+'</select>')+'<p class="muted small">'+sendModeHint+'</p>':'')+'<div data-child-entity="'+esc(child.id)+'"></div><button class="btn text" data-remove-child="'+index+'">'+glyph('trash')+'Quitar botón</button></div>').join('')+'<button class="btn" id="add-folder-child">'+glyph('plus')+'Añadir botón a la carpeta</button>';
+      target.innerHTML=children.map((child,index)=>'<div class="child-config">'+field('Nombre','<input data-child-name="'+index+'" value="'+esc(child.name)+'" maxlength="40">')+'<label class="dual-show-name"><input type="checkbox" data-child-show="'+index+'"'+(child.showName!==false?' checked':'')+(">"+h("Mostrar texto")+"</label>")+field('Icono','<select data-child-icon="'+index+'">'+selectOptions(symbols,child.icon)+'</select>')+field('Acción','<select data-child-action="'+index+'">'+actionSelectOptions(allowedActions,child.action)+'</select>')+(actionValueChoices(child.action)?field(actionValueLabel(child.action),'<select data-child-value="'+index+'">'+selectOptions(actionValueChoices(child.action),child.value||defaultActionValue(child.action))+'</select>'):'')+(independentChoices(child).length?field('Cómo envía la señal','<select data-child-send-mode="'+index+'">'+selectOptions(sendModeOptions,child.sendMode==='independent'?'independent':'settings')+'</select>')+'<p class="muted small">'+h(sendModeHint)+'</p>':'')+'<div data-child-entity="'+esc(child.id)+'"></div><button class="btn text" data-remove-child="'+index+'">'+glyph('trash')+(h("Quitar botón")+"</button></div>")).join('')+'<button class="btn" id="add-folder-child">'+glyph('plus')+(h("Añadir botón a la carpeta")+"</button>");
       $$('[data-child-name]',target).forEach(input=>input.addEventListener('input',()=>{children[Number(input.dataset.childName)].name=input.value;renderEntityFields();},{signal:modalAbort.signal}));
       $$('[data-child-show]',target).forEach(input=>input.addEventListener('change',()=>children[Number(input.dataset.childShow)].showName=input.checked,{signal:modalAbort.signal}));
       $$('[data-child-icon]',target).forEach(input=>input.addEventListener('change',()=>children[Number(input.dataset.childIcon)].icon=input.value,{signal:modalAbort.signal}));
@@ -1013,7 +1045,7 @@ export function mountStudio(root,api,initial,isAdmin,openMenu) {
       $$('[data-child-value]',target).forEach(input=>input.addEventListener('change',()=>{children[Number(input.dataset.childValue)].value=input.value;renderEntityFields();},{signal:modalAbort.signal}));
       $$('[data-child-send-mode]',target).forEach(input=>input.addEventListener('change',()=>{children[Number(input.dataset.childSendMode)].sendMode=input.value;renderEntityFields();},{signal:modalAbort.signal}));
       $$('[data-remove-child]',target).forEach(input=>input.addEventListener('click',()=>{children.splice(Number(input.dataset.removeChild),1);renderChildren();},{signal:modalAbort.signal}));
-      $('#add-folder-child').addEventListener('click',()=>{children.push(button('Nuevo botón','remote','learned'));renderChildren();},{signal:modalAbort.signal});
+      $('#add-folder-child').addEventListener('click',()=>{children.push(button(t("Nuevo botón"),'remote','learned'));renderChildren();},{signal:modalAbort.signal});
       renderEntityFields();
     };
     const renderActionFields=()=>{
@@ -1025,7 +1057,7 @@ export function mountStudio(root,api,initial,isAdmin,openMenu) {
         if(draft.group==='fan'){draft.fanSpeedCount=clamp(draft.fanSpeedCount,2,5,3);draft.fanAuto=draft.fanAuto!==false;}
         if(draft.group==='swing'){draft.swingPositionCount=clamp(draft.swingPositionCount,1,6,6);draft.swingAuto=draft.swingAuto!==false;draft.swingOff=draft.swingOff!==false;}
         if(official)ensureIndependentActions(draft);
-        target.innerHTML=field('Contenido de la carpeta','<select id="group-kind">'+selectOptions(groups,draft.group)+'</select>')+(official?field('Cómo envía la señal','<select id="group-send-mode">'+selectOptions([{value:'settings',name:'Ajustes del mando'},{value:'independent',name:'Acción independiente'}],draft.sendMode)+'</select>')+'<p class="muted small">'+(draft.sendMode==='independent'?'Cada opción envía su propia señal. Si algún control de este ajuste es independiente, el ajuste queda fuera del estado general.':'Cada opción cambia el ajuste del mando y utiliza la señal del estado completo que corresponda.')+'</p>':'')+(draft.group==='custom'?'<div id="folder-children" class="stack"></div>':draft.group==='fan'?field('Cantidad de velocidades','<select id="fan-speed-count">'+selectOptions([2,3,4,5].map(n=>({value:String(n),name:String(n)})),String(draft.fanSpeedCount))+'</select>')+checkField('fan-auto','Tiene modo automático',draft.fanAuto):draft.group==='swing'?field('Cantidad de posiciones fijas','<select id="swing-position-count">'+selectOptions([1,2,3,4,5,6].map(n=>({value:String(n),name:String(n)})),String(draft.swingPositionCount))+'</select>')+checkField('swing-auto','Tiene oscilación automática',draft.swingAuto)+checkField('swing-off','Permite desactivar la oscilación',draft.swingOff):'<p class="muted small">La carpeta abre una tarjeta centrada con las opciones del mando.</p>');
+        target.innerHTML=field('Contenido de la carpeta','<select id="group-kind">'+selectOptions(groups,draft.group)+'</select>')+(official?field('Cómo envía la señal','<select id="group-send-mode">'+selectOptions([{value:'settings',name:'Ajustes del mando'},{value:'independent',name:'Acción independiente'}],draft.sendMode)+'</select>')+'<p class="muted small">'+h(draft.sendMode==='independent'?'Cada opción envía su propia señal. Si algún control de este ajuste es independiente, el ajuste queda fuera del estado general.':'Cada opción cambia el ajuste del mando y utiliza la señal del estado completo que corresponda.')+'</p>':'')+(draft.group==='custom'?'<div id="folder-children" class="stack"></div>':draft.group==='fan'?field('Cantidad de velocidades','<select id="fan-speed-count">'+selectOptions([2,3,4,5].map(n=>({value:String(n),name:String(n)})),String(draft.fanSpeedCount))+'</select>')+checkField('fan-auto','Tiene modo automático',draft.fanAuto):draft.group==='swing'?field('Cantidad de posiciones fijas','<select id="swing-position-count">'+selectOptions([1,2,3,4,5,6].map(n=>({value:String(n),name:String(n)})),String(draft.swingPositionCount))+'</select>')+checkField('swing-auto','Tiene oscilación automática',draft.swingAuto)+checkField('swing-off','Permite desactivar la oscilación',draft.swingOff):("<p class=\"muted small\">"+h("La carpeta abre una tarjeta centrada con las opciones del mando.")+"</p>"));
         $('#group-kind')?.addEventListener('change',event=>{draft.group=event.target.value;if(draft.group==='swing'&&['folder','wind'].includes(draft.icon)){draft.icon='swing';$('#button-icon').value='swing';$('#button-icon').dispatchEvent(new Event('change',{bubbles:true}));}renderActionFields();preview();},{signal:modalAbort.signal});
         $('#group-send-mode')?.addEventListener('change',event=>{draft.sendMode=event.target.value;renderActionFields();},{signal:modalAbort.signal});
         $('#fan-speed-count')?.addEventListener('change',event=>{draft.fanSpeedCount=clamp(event.target.value,2,5,3);renderActionFields();preview();},{signal:modalAbort.signal});
@@ -1038,7 +1070,7 @@ export function mountStudio(root,api,initial,isAdmin,openMenu) {
         renderDual();
       } else if(draft.type==='display') {
         const fields=[['temperature','Temperatura objetivo'],['mode','Modo'],['fan','Ventilador'],['swing','Oscilación'],['power','Encendido / apagado']];
-        target.innerHTML=screenSizeControls(displayDraft)+'<div class="form-grid">'+field('Estilo','<select id="new-display-style"><option value="lcd"'+(displayDraft.style==='lcd'?' selected':'')+'>Pantalla LCD</option><option value="modern"'+(displayDraft.style==='modern'?' selected':'')+'>Home Assistant</option></select>')+field('Color de la pantalla','<input type="color" id="new-display-color" value="'+esc(displayDraft.accent)+'">')+'</div><div class="field"><span>Información visible</span><div class="display-edit-fields">'+fields.map(([key,label])=>checkField(key,label,displayDraft.fields[key])).join('')+'</div></div><p class="muted small">La pantalla muestra los ajustes del mando.</p>';
+        target.innerHTML=screenSizeControls(displayDraft)+'<div class="form-grid">'+field('Estilo','<select id="new-display-style">'+selectOptions([{value:'lcd',name:'Pantalla LCD'},{value:'modern',name:'Home Assistant'}],displayDraft.style)+'</select>')+field('Color de la pantalla','<input type="color" id="new-display-color" value="'+esc(displayDraft.accent)+'">')+("</div><div class=\"field\"><span>"+h("Información visible")+"</span><div class=\"display-edit-fields\">")+fields.map(([key,label])=>checkField(key,label,displayDraft.fields[key])).join('')+("</div></div><p class=\"muted small\">"+h("La pantalla muestra los ajustes del mando.")+"</p>");
         wireScreenSizeControls(displayDraft,preview);
         $('#new-display-style').addEventListener('change',event=>{displayDraft.style=event.target.value;preview();},{signal:modalAbort.signal});
         $('#new-display-color').addEventListener('input',event=>{displayDraft.accent=event.target.value;preview();},{signal:modalAbort.signal});
@@ -1046,14 +1078,14 @@ export function mountStudio(root,api,initial,isAdmin,openMenu) {
       } else {
         if(!allowedActions.some(action=>action.value===draft.action))draft.action=allowedActions[0].value;
         if(actionValueChoices(draft.action)&&!actionValueChoices(draft.action).some(option=>option.value===draft.value))draft.value=defaultActionValue(draft.action);
-        target.innerHTML=field('Acción','<select id="button-action">'+actionSelectOptions(allowedActions,draft.action)+'</select>')+(actionValueChoices(draft.action)?field(actionValueLabel(draft.action),'<select id="action-value">'+selectOptions(actionValueChoices(draft.action),draft.value||defaultActionValue(draft.action))+'</select>'):draft.action==='send_state'?'<p class="muted small">Envía la señal aprendida que corresponde a los ajustes actuales del mando, sin cambiar sus valores.</p>':draft.action==='learned'?'<p class="muted small">Aprende la señal del mando original. Probarla es opcional; puedes guardarla en cuanto se reciba.</p>':'');
+        target.innerHTML=field('Acción','<select id="button-action">'+actionSelectOptions(allowedActions,draft.action)+'</select>')+(actionValueChoices(draft.action)?field(actionValueLabel(draft.action),'<select id="action-value">'+selectOptions(actionValueChoices(draft.action),draft.value||defaultActionValue(draft.action))+'</select>'):draft.action==='send_state'?("<p class=\"muted small\">"+h("Envía la señal aprendida que corresponde a los ajustes actuales del mando, sin cambiar sus valores.")+"</p>"):draft.action==='learned'?("<p class=\"muted small\">"+h("Aprende la señal del mando original. Probarla es opcional; puedes guardarla en cuanto se reciba.")+"</p>"):'');
         $('#button-action')?.addEventListener('change',event=>{draft.action=event.target.value;draft.value=defaultActionValue(draft.action);renderActionFields();},{signal:modalAbort.signal});
         $('#action-value')?.addEventListener('change',event=>{draft.value=event.target.value;renderEntityFields();},{signal:modalAbort.signal});
       }
       renderEntityFields();
     };
     showModal(original?'Editar función':'Añadir función',field('Tipo de función','<select id="function-type">'+selectOptions([{value:'button',name:'Botón'},{value:'dual',name:'Botón de doble acción'},{value:'group',name:'Carpeta'},{value:'display',name:'Pantalla'}],draft.type)+'</select>')+'<div id="button-live" class="button-live"></div><div id="button-appearance">'+field('Nombre','<input id="button-name" maxlength="40" value="'+esc(draft.name)+'">')+checkField('show-name','Mostrar texto',draft.showName)+'<div class="form-grid">'+field('Icono','<select id="button-icon">'+selectOptions(symbols,draft.icon)+'</select>')+field('Color','<input type="color" id="button-color" value="'+esc(draft.color)+'">')+'</div></div><div id="action-fields"></div><div id="function-send-mode"></div><div id="function-entity"></div><div id="function-learning"></div><p id="form-error" class="warning" hidden></p>',[
-      ...(original?[{label:'Eliminar',className:'danger',run:()=>{closeModal();confirmDelete('Eliminar función','Se eliminará «'+original.name+'» de este mando.',()=>{const slot=getButton(d,original.id);if(slot)slot.row.cells[slot.index]=null;});}}]:[]),
+      ...(original?[{label:'Eliminar',className:'danger',run:()=>{closeModal();confirmDelete('Eliminar función',{source:'Se eliminará «{name}» de este mando.',params:{name:original.name}},()=>{const slot=getButton(d,original.id);if(slot)slot.row.cells[slot.index]=null;});}}]:[]),
       {label:'Cancelar'},{label:'Guardar cambios',className:'primary',run:async()=>{
         draft.name=draft.name.trim();
         prepareDraft();
@@ -1063,7 +1095,7 @@ export function mountStudio(root,api,initial,isAdmin,openMenu) {
           if(!draft.name){formError('Escribe un nombre para la función.');return;}
           if(draft.type==='dual') {
             const invalid=draft.actions.findIndex(side=>!side.name.trim()||(!side.showName&&side.icon==='none'));
-            if(invalid>=0){previewSide=invalid;renderDual();preview();formError('En Acción '+(invalid+1)+', escribe un nombre y comprueba que se muestre el texto o un icono.');return;}
+            if(invalid>=0){previewSide=invalid;renderDual();preview();formError('En Acción {number}, escribe un nombre y comprueba que se muestre el texto o un icono.',{number:invalid+1});return;}
             draft.actions=dualActions(draft,d);
           } else if(draft.icon==='none'&&!draft.showName){formError('Activa «Mostrar texto» o selecciona un icono para que el botón se vea.');return;}
           if(draft.type==='group'&&draft.group==='custom'&&(!draft.children.length||draft.children.some(child=>!child.name.trim()||(child.showName===false&&child.icon==='none')))){formError('Añade al menos un botón con nombre y comprueba que se muestre el texto o un icono.');return;}
@@ -1087,7 +1119,7 @@ export function mountStudio(root,api,initial,isAdmin,openMenu) {
       }}
     ],()=>{
       updateAppearance();preview();renderActionFields();
-      $('#function-type').addEventListener('change',event=>{draft.type=event.target.value;updateAppearance();if(draft.type==='dual'&&(!draft.name.trim()||draft.name==='Nueva función')){draft.name=d.type==='stateful'?'Encendido del aire':'Botón de doble acción';$('#button-name').value=draft.name;}if(draft.type==='group'&&draft.icon==='remote'){draft.icon='folder';$('#button-icon').value='folder';}renderActionFields();preview();},{signal:modalAbort.signal});
+      $('#function-type').addEventListener('change',event=>{draft.type=event.target.value;updateAppearance();if(draft.type==='dual'&&(!draft.name.trim()||draft.name===t('Nueva función'))){draft.name=t(d.type==='stateful'?'Encendido del aire':'Botón de doble acción');$('#button-name').value=draft.name;}if(draft.type==='group'&&draft.icon==='remote'){draft.icon='folder';$('#button-icon').value='folder';}renderActionFields();preview();},{signal:modalAbort.signal});
       $('#button-name').addEventListener('input',event=>{draft.name=event.target.value;preview();},{signal:modalAbort.signal});
       $('#button-icon').addEventListener('change',event=>{draft.icon=event.target.value;preview();},{signal:modalAbort.signal});
       $('#button-color').addEventListener('input',event=>{draft.color=event.target.value;preview();},{signal:modalAbort.signal});
@@ -1097,7 +1129,7 @@ export function mountStudio(root,api,initial,isAdmin,openMenu) {
   function changeColumns(d,id,delta) {
     const r=d.rows.find(v=>v.id===id);if(!r||r.type!=='buttons')return;const next=clamp(r.columns+delta,1,6,1);if(next===r.columns)return;
     const count=r.cells.filter(Boolean).length;
-    if(count>next) {const element=app.querySelector('[data-row="'+CSS.escape(r.id)+'"]');$$('.remote-button',element).forEach(b=>{b.classList.remove('blocked');void b.offsetWidth;b.classList.add('blocked');setTimeout(()=>b.classList.remove('blocked'),1100);});toast('Esta fila tiene '+count+' botones. Mueve o elimina uno antes de reducirla.');return;}
+    if(count>next) {const element=app.querySelector('[data-row="'+CSS.escape(r.id)+'"]');$$('.remote-button',element).forEach(b=>{b.classList.remove('blocked');void b.offsetWidth;b.classList.add('blocked');setTimeout(()=>b.classList.remove('blocked'),1100);});toast('Esta fila tiene {count} botones. Mueve o elimina uno antes de reducirla.',{count:locale.number(count)});return;}
     if(delta<0)r.cells.splice(r.cells.lastIndexOf(null),1);else r.cells.push(null);r.columns=next;persist();render();
   }
   app.addEventListener('click',event=>{
@@ -1134,7 +1166,7 @@ export function mountStudio(root,api,initial,isAdmin,openMenu) {
     if(target.dataset.columns){changeColumns(d,target.dataset.columns,Number(target.dataset.delta));return;}
     if(target.dataset.width){const r=d.rows.find(v=>v.id===target.dataset.width);if(r?.type==='display'){r.width=clamp(clamp(r.width,3,6,3)+Number(target.dataset.delta),3,6,3);persist();render();}return;}
     if(target.dataset.height){const r=d.rows.find(v=>v.id===target.dataset.height);if(r){r.height=clamp(r.height+Number(target.dataset.delta),r.type==='display'?2:1,4,2);persist();render();}return;}
-    if(target.dataset.deleteRow){const r=d.rows.find(v=>v.id===target.dataset.deleteRow);if(!r)return;const remove=()=>{d.rows=d.rows.filter(v=>v!==r);};if(r.type==='display'||r.cells.some(Boolean))confirmDelete('Eliminar '+(r.type==='display'?'pantalla':'fila'),'Se eliminará '+(r.type==='display'?'esta pantalla':'la fila y todos sus botones')+' del mando.',remove);else{remove();persist();render();}return;}
+    if(target.dataset.deleteRow){const r=d.rows.find(v=>v.id===target.dataset.deleteRow);if(!r)return;const remove=()=>{d.rows=d.rows.filter(v=>v!==r);};if(r.type==='display'||r.cells.some(Boolean))confirmDelete(r.type==='display'?'Eliminar pantalla':'Eliminar fila',r.type==='display'?'Se eliminará esta pantalla del mando.':'Se eliminará la fila y todos sus botones del mando.',remove);else{remove();persist();render();}return;}
   });
   function clearDrag() {$$('.dragging,.drop-target',app).forEach(e=>e.classList.remove('dragging','drop-target'));dragGhost?.remove();dragGhost=null;drag=null;}
   function clearTouchDrag() {
@@ -1200,11 +1232,12 @@ export function mountStudio(root,api,initial,isAdmin,openMenu) {
   app.addEventListener('dragend',clearDrag);
   for(const event of ['wheel','touchmove','pointerdown','keydown'])window.addEventListener(event,()=>{inputGeneration++;},{capture:true,passive:true,signal:lifecycle.signal});
   scope.querySelector('#sidebar-toggle')?.addEventListener('click',openMenu,{signal:lifecycle.signal});
-  mountIconPickers(scope,lifecycle);
+  mountIconPickers(scope,lifecycle,locale);
   if(api.subscribe)Promise.resolve(api.subscribe(receiveEnvelope)).then(stop=>{if(disposed)stop?.();else unsubscribe=stop;}).catch(()=>{});
   render();
   return {
     hassChanged(){refreshAmbientReadings();},
+    languageChanged,
     dispose(){disposed=true;operation++;unsubscribe?.();modalAbort?.abort();lifecycle.abort();clearTimeout(toastTimer);clearDrag();clearTouchDrag();for(const entry of Array.from(landingGhosts))finishTouchLanding(entry);if(modal.open)modal.close();if(entityModal.open)entityModal.close();}
   };
 }

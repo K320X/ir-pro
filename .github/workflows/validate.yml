@@ -38,6 +38,7 @@ jobs:
       - run: node tests/frontend-independent-actions.mjs
       - run: node tests/frontend-modal-scroll.mjs
       - run: node tests/frontend-editing.mjs
+      - run: node tests/frontend-languages.mjs
       - run: python scripts/build_release.py
   hacs:
     name: HACS custom repository

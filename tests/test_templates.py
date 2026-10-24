@@ -21,6 +21,7 @@ import vm from 'node:vm';
 const request=JSON.parse(readFileSync(0,'utf8'));
 const root=process.cwd();
 const {importModel,exportModel,independentStateEffect,linkedActionEffect}=await import(pathToFileURL(root+'/custom_components/ir_pro/frontend/ir-pro-model.js'));
+const {createI18n}=await import(pathToFileURL(root+'/custom_components/ir_pro/frontend/ir-pro-i18n.js'));
 if(request.operation==='roundtrip'){
   process.stdout.write(JSON.stringify(exportModel(importModel(request.model))));
 }else{
@@ -28,8 +29,10 @@ if(request.operation==='roundtrip'){
   const definitions=source.slice(source.indexOf('  const copy ='),source.indexOf('  let model=importModel'));
   const entities=source.slice(source.indexOf('  const entitySlug ='),source.indexOf('  function toast('));
   if(!definitions.includes('const newRemote =')||!entities.includes('function ensureModelEntities'))throw Error('Missing real controller factories');
-  const context={uid:randomUUID,independentStateEffect,linkedActionEffect};
-  vm.createContext(context);vm.runInContext(definitions+'\n'+entities,context);
+  const locale=createI18n('es');
+  const context={uid:randomUUID,independentStateEffect,linkedActionEffect,locale,t:locale.t};
+  const optionBinding=source.split('\n').find(line=>line.trimStart().startsWith('const optionBinding ='));
+  vm.createContext(context);vm.runInContext(optionBinding+'\n'+definitions+'\n'+entities,context);
   vm.runInContext(`globalThis.remotes=[newRemote('Split uno','air-vent'),newRemote('Split dos','wind'),newRemote('Televisor','tv'),newRemote('Televisor','tv')];`,context);
   context.model={version:1,emitters:[{id:'00000000-0000-4000-8000-000000000001',sourceId:'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',name:'IR salón',model:'RM4 mini',devices:context.remotes}]};
   context.emitterFor=id=>context.model.emitters.find(emitter=>emitter.devices.some(device=>device.id===id));

@@ -1,3 +1,4 @@
+import {withLocale} from './frontend-test-locale.mjs';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {randomUUID} from 'node:crypto';
@@ -20,7 +21,7 @@ const decode=value=>value.replaceAll('&quot;','"').replaceAll('&#39;',"'").repla
 // This DOM adapter models only native markup, values and events. All identity,
 // conversion, confirmation, validation and save decisions execute production
 // controller functions and the production editor/model modules below.
-class Element {
+export class Element {
  constructor(tag='div',attributes={}){
   this.tagName=tag.toUpperCase();this.attributes={...attributes};this.children=[];this.parentElement=null;this.listeners=new Map();this.ownText='';this.html='';
   this.value=attributes.value||'';this.checked=Object.hasOwn(attributes,'checked');this.disabled=Object.hasOwn(attributes,'disabled');this.hidden=Object.hasOwn(attributes,'hidden');this.open=false;
@@ -36,6 +37,7 @@ class Element {
  setAttribute(key,value){this.attributes[key]=String(value);} getAttribute(key){return this.attributes[key]??null;}
  removeAttribute(key){delete this.attributes[key];} hasAttribute(key){return Object.hasOwn(this.attributes,key);}
  matches(selector){
+  if(selector.includes(','))return selector.split(',').some(part=>this.matches(part));
   const parts=selector.trim().split(/\s+(?![^\[]*\])/);if(parts.length>1){const last=parts.pop();if(!this.matches(last))return false;let parent=this.parentElement;while(parent){if(parent.matches(parts.join(' ')))return true;parent=parent.parentElement;}return false;}
   const tag=selector.match(/^[a-z][\w-]*/i)?.[0];if(tag&&tag.toUpperCase()!==this.tagName)return false;
   const id=selector.match(/#([\w-]+)/)?.[1];if(id&&this.id!==id)return false;
@@ -45,6 +47,7 @@ class Element {
  }
  querySelectorAll(selector){return this.children.flatMap(child=>[...(child.matches(selector)?[child]:[]),...child.querySelectorAll(selector)]);}
  querySelector(selector){return this.querySelectorAll(selector)[0]||null;}
+ getElementById(id){return this.querySelector('#'+id);}
  closest(selector){for(let node=this;node;node=node.parentElement)if(node.matches(selector))return node;return null;}
  addEventListener(name,callback,options={}){
   const entry={callback,once:options.once};if(options.signal?.aborted)return;const entries=this.listeners.get(name)||[];entries.push(entry);this.listeners.set(name,entries);
@@ -69,7 +72,7 @@ function parse(html,root){
  }
 }
 
-function harness(){
+export function controlEditorHarness(language='es'){
  const root=new Element('root');root.innerHTML=template;
  const $=(selector,scope=root)=>scope.querySelector(selector),$$=(selector,scope=root)=>scope.querySelectorAll(selector);
  const calls=[],messages=[],scope={
@@ -81,7 +84,7 @@ function harness(){
   api:{call:async(action,data)=>{calls.push([action,plain(data)]);assert.equal(action,'save','Editing and confirmation must never learn or emit IR');if(scope.rejectSave)throw scope.rejectSave;const model=structuredClone(data.model);for(const emitter of model.emitters)for(const device of emitter.devices)for(const fn of device.functions)fn.signals=Object.fromEntries(Object.keys(fn.signal_refs||{}).map(key=>[key,true]));return {model,revision:++scope.revision};}}
  };
  scope.emitterFor=id=>scope.model.emitters.find(emitter=>emitter.devices.some(device=>device.id===id));
- vm.createContext(scope);
+ vm.createContext(withLocale(scope,language));
  const options=source.slice(source.indexOf('  const clamp ='),source.indexOf('  const button ='));
  const constructors=source.slice(source.indexOf('  const button ='),source.indexOf('  function validateDevice'));
  const constants=['entitySlug','entityDomain','selectOptions','actionSelectOptions','field','checkField'].map(constant).join('\n');
@@ -97,6 +100,7 @@ function harness(){
  const confirmation=()=>root.children.find(child=>child.className==='signal-delete-modal');
  return {scope,calls,messages,device,edit,control,change,button,confirmation};
 }
+const harness=controlEditorHarness;
 const tick=()=>new Promise(resolve=>setImmediate(resolve));
 
 const assertActionSelector=select=>{
@@ -197,7 +201,7 @@ const assertActionSelector=select=>{
 {
  const h=harness(),light=h.device().rows[1].cells[0],before=JSON.stringify(h.scope.model);h.edit(light.id);
  await h.control('[data-entity-edit]').click();h.control('#entity-suffix').value='identificador_ocupado';await h.control('#entity-accept').click();
- h.scope.rejectSave=Object.assign(new Error('La entidad ya existe en Home Assistant.'),{code:'invalid_model'});
+ h.scope.rejectSave=Object.assign(new Error('La entidad ya existe en Home Assistant.'),{code:'invalid_model',irProLocalized:true,irProLanguage:'es'});
  let saving=h.button('Guardar cambios').click();await tick();await h.confirmation().querySelector('[data-confirm]').click();await saving;
  assert.equal(h.scope.saveFailed,false);assert.equal(h.scope.modal.open,true);assert.equal(JSON.stringify(h.scope.model),before);assert.equal(h.control('#form-error').hidden,false);assert.match(h.control('#form-error').textContent,/ya existe/);
  h.scope.rejectSave=null;await h.control('[data-entity-edit]').click();h.control('#entity-suffix').value='identificador_libre';await h.control('#entity-accept').click();

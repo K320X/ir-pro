@@ -1,3 +1,4 @@
+import {withLocale} from './frontend-test-locale.mjs';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {randomUUID} from 'node:crypto';
@@ -11,7 +12,7 @@ const extract=name=>{
   assert.ok(start>=0&&end>start,name);return source.slice(start,end);
 };
 const context={uid:randomUUID,copy:structuredClone,independentStateEffect,linkedActionEffect,symbols:[{value:'fan'},{value:'swing'},{value:'snowflake'},{value:'sun'},{value:'droplet'}],clamp:(value,min,max,fallback)=>Number.isFinite(Number(value))?Math.min(max,Math.max(min,Math.round(Number(value)))):fallback};
-vm.createContext(context);
+vm.createContext(withLocale(context));
 vm.runInContext(source.slice(source.indexOf('  const modes ='),source.indexOf('  const symbols ='))+'\n'+source.slice(source.indexOf('  const button ='),source.indexOf('  const row =')),context);
 const run=code=>vm.runInContext(code,context);
 context.folder={id:'folder',type:'group',name:'Ventilador',group:'fan',color:'#56c4ed',fanSpeedCount:5,fanAuto:true,sendMode:'settings'};
@@ -70,7 +71,7 @@ let calls=[],fail=false,renders=0,errors=0;
 const replyWithState=state=>{const response={model:structuredClone(wire),revision:10};response.model.emitters[0].devices[0].studio.state=structuredClone(state);return response;};
 let validatedDevices=0,validConfiguration=true;
 const runtime={independentStateEffect,independentSending:false,signalBusy:false,disposed:false,model:importModel(wire,device.id),confirmedWire:{},revision:0,catalog:[],modes:run('modes'),fans:run('fans'),swingStates:run('swingStates'),emitterFor:()=>({sourceId:'broadlink-source'}),copy:structuredClone,importModel,validateDevice(){validatedDevices++;return validConfiguration;},render(){renders++;},toast(){},api:{call:async(action,data)=>{calls.push([action,data]);if(fail)throw new Error('IR unavailable');return replyWithState({...runtime.d.state,fan:'auto'});}},queuePhysical:async action=>{try{return await action();}catch{errors++;return false;}}};
-vm.createContext(runtime);vm.runInContext(extract('adoptCommandEnvelope')+'\n'+extract('executeIndependent'),runtime);
+vm.createContext(withLocale(runtime));vm.runInContext(extract('adoptCommandEnvelope')+'\n'+extract('executeIndependent'),runtime);
 runtime.d=structuredClone(device);runtime.b=structuredClone(fanAuto);
 const before=structuredClone(runtime.d.state);runtime.b.signals.press=false;
 assert.equal(await vm.runInContext('executeIndependent(d,b)',runtime),false);assert.equal(calls.length,0);assert.deepEqual(runtime.d.state,before);
@@ -143,7 +144,7 @@ controls[0].click();assert.equal(executed,1);assert.equal(closed,1);
 const origin={id:'origin',sourceId:'source-a',devices:[device]},sameSource={id:'same',sourceId:'source-a',devices:[]},otherSource={id:'other',sourceId:'source-b',devices:[]};
 let duplicateRun,destination='other';
 const duplication={model:{emitters:[origin,sameSource,otherSource]},emitterFor:()=>origin,uid:randomUUID,copy:structuredClone,esc:String,field:()=>'',selectOptions:()=>'',glyph:()=>'',showModal(title,html,buttons){duplicateRun=buttons.at(-1).run;},$:selector=>({value:selector==='#duplicate-name'?'Otra habitación':destination}),persist:async()=>true,closeModal(){},render(){},toast(){},formError(message){throw new Error(message);}};
-vm.createContext(duplication);vm.runInContext(extract('duplicateDevice'),duplication);duplication.d=device;
+vm.createContext(withLocale(duplication));vm.runInContext(extract('duplicateDevice'),duplication);duplication.d=device;
 const originalDevice=JSON.stringify(device);
 vm.runInContext('duplicateDevice(d)',duplication);await duplicateRun();
 const other=otherSource.devices[0],otherActions=other.rows[0].cells[0].independentActions;
@@ -175,7 +176,7 @@ genericRuntime.api={call:async(action,data)=>{
  for(const fn of target.functions)fn.signals=Object.fromEntries(Object.keys(fn.signal_refs||{}).map(key=>[key,true]));
  return {model:next,revision:++genericRevision};
 }};
-vm.createContext(genericRuntime);vm.runInContext(['adoptCommandEnvelope','executeIndependent','learnedActionFor','executeAction','commitState'].map(extract).join('\n'),genericRuntime);
+vm.createContext(withLocale(genericRuntime));vm.runInContext(['adoptCommandEnvelope','executeIndependent','learnedActionFor','executeAction','commitState'].map(extract).join('\n'),genericRuntime);
 const pressDual=async()=>{genericRuntime.d=genericRuntime.model.emitters[0].devices[0];genericRuntime.b=genericRuntime.d.rows[1].cells[1];return vm.runInContext('executeAction(d,b)',genericRuntime);};
 assert.equal(await pressDual(),true);assert.equal(genericRuntime.model.emitters[0].devices[0].state.power,true);assert.equal(genericCalls[0][1].function_key,powerChildren[0].id);
 assert.equal(await pressDual(),true);assert.equal(genericRuntime.model.emitters[0].devices[0].state.power,false);assert.equal(genericCalls[1][1].function_key,powerChildren[1].id);
@@ -206,7 +207,7 @@ const aggregateReply={revision:30,model:structuredClone(aggregateWire)},aggregat
 aggregateTarget.studio.state.swing='position_6';aggregateTarget.functions=aggregateTarget.functions.filter(fn=>fn.key!==fanAuto.id);aggregateTarget.studio.rows[0].cells[0].independentActions=aggregateTarget.studio.rows[0].cells[0].independentActions.filter(node=>node.id!==fanAuto.id);aggregateTarget.studio.rows.push({id:'concurrent-row',type:'display',width:3,height:2,fields:{temperature:true}});for(const row of aggregateTarget.layout.rows)row.cells=row.cells.map(key=>key===fanAuto.id?null:key);
 let resolveAggregate,aggregateError,aggregateCall;
 const aggregateRuntime={independentSending:false,disposed:false,catalog:[],revision:20,confirmedWire:structuredClone(aggregateWire),model:importModel(aggregateWire,aggregateDevice.id),controlledStateFields,importModel,copy:structuredClone,modes:run('modes'),fans:run('fans'),swingStates:run('swingStates'),emitterFor:()=>({sourceId:'broadlink-source'}),validateDevice:()=>true,render(){},toast(){},clearActionError(){},savedStateFor:()=>({signal:{kind:'learned',id:'aggregate'}}),persist:async after=>{try{return await after();}catch(error){aggregateError=error;return false;}},api:{call:async(action,data)=>{aggregateCall=[action,data];return new Promise(resolve=>{resolveAggregate=resolve;});}}};
-vm.createContext(aggregateRuntime);vm.runInContext(extract('adoptCommandEnvelope')+'\n'+extract('commitState')+'\n'+extract('executeAction'),aggregateRuntime);aggregateRuntime.d=aggregateRuntime.model.emitters[0].devices[0];
+vm.createContext(withLocale(aggregateRuntime));vm.runInContext(extract('adoptCommandEnvelope')+'\n'+extract('commitState')+'\n'+extract('executeAction'),aggregateRuntime);aggregateRuntime.d=aggregateRuntime.model.emitters[0].devices[0];
 const aggregatePending=vm.runInContext('commitState(d,"Enviar",true)',aggregateRuntime);assert.equal(aggregateRuntime.independentSending,true);assert.equal(aggregateCall[0],'send_state');assert.deepEqual(Array.from(aggregateCall[1].controlled_fields),['power','mode','temperature','fan']);
 const beforePending=JSON.stringify(aggregateRuntime.model);aggregateRuntime.b={type:'button',action:'temp_up'};assert.equal(await vm.runInContext('executeAction(d,b)',aggregateRuntime),false);assert.equal(JSON.stringify(aggregateRuntime.model),beforePending);
 resolveAggregate(aggregateReply);assert.equal(await aggregatePending,true);assert.equal(aggregateRuntime.independentSending,false);const afterAggregate=aggregateRuntime.model.emitters[0].devices[0];assert.equal(afterAggregate.state.swing,'position_6');assert.equal(aggregateRuntime.d.state.swing,'position_6');assert.ok(afterAggregate.rows.some(row=>row.id==='concurrent-row'));assert.ok(!exportModel(aggregateRuntime.model).emitters[0].devices[0].functions.some(fn=>fn.key===fanAuto.id));
@@ -230,7 +231,7 @@ const settingsRuntime={model:settingsFixture(),independentSending:false,disposed
  if(responseChange==='phase')dual.activeSide=1;
  return {revision:++genericRevision,model:next};
 }}};
-vm.createContext(settingsRuntime);vm.runInContext(['adoptCommandEnvelope','commitState','learnedActionFor','executeAction'].map(extract).join('\n'),settingsRuntime);
+vm.createContext(withLocale(settingsRuntime));vm.runInContext(['adoptCommandEnvelope','commitState','learnedActionFor','executeAction'].map(extract).join('\n'),settingsRuntime);
 const pressSettingsDual=async()=>{settingsRuntime.d=settingsRuntime.model.emitters[0].devices[0];settingsRuntime.b=settingsRuntime.d.rows[1].cells[1];return vm.runInContext('executeAction(d,b)',settingsRuntime);};
 const detachedDual=settingsRuntime.model.emitters[0].devices[0].rows[1].cells[1];assert.equal(await pressSettingsDual(),true);assert.equal(detachedDual.activeSide,0);assert.equal(settingsRuntime.model.emitters[0].devices[0].rows[1].cells[1].activeSide,1);assert.deepEqual(phaseSaves,[1]);
 assert.equal(await pressSettingsDual(),true);assert.equal(settingsRuntime.model.emitters[0].devices[0].rows[1].cells[1].activeSide,0);assert.deepEqual(phaseSaves,[1,0]);assert.equal(settingsRuntime.model.emitters[0].devices[0].state.temperature,24);
@@ -253,7 +254,7 @@ function genericSendHarness(){
   api:{call:async(action,data)=>{calls.push([action,plain(data)]);assert.equal(action,'send_state');if(runtime.rejectSend)throw runtime.rejectSend;if(runtime.delayedResponse)return runtime.delayedResponse();return response();}}
  };
  runtime.emitterFor=id=>runtime.model.emitters.find(emitter=>emitter.devices.some(device=>device.id===id));
- vm.createContext(runtime);
+ vm.createContext(withLocale(runtime));
  const constant=name=>source.split('\n').find(line=>line.trimStart().startsWith('const '+name+' ='));
  const config=source.slice(source.indexOf('  const clamp ='),source.indexOf('  const button ='));
  const constructors=source.slice(source.indexOf('  const button ='),source.indexOf('  function validateDevice'));

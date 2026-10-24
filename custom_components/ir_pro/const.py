@@ -1,7 +1,7 @@
 """Constants for IR Pro."""
 
 DOMAIN = "ir_pro"
-VERSION = "1.0.2"
+VERSION = "1.0.3"
 STORAGE_VERSION = 1
 STORAGE_KEY = "ir_pro"
 PLATFORMS = ["button", "switch"]
